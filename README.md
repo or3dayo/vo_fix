@@ -5,6 +5,59 @@ SUNO等のAI歌声を人間っぽくする後処理ツール。
 「均一すぎる AI ピッチ・音量に、人間の声がもつ自然な揺らぎを足し戻す」のが本体の仕事です。
 声質変換そのもの (RVC) は専用ツール (Applio など) に任せて、vo_fix は仕上げに特化します。
 
+---
+
+## 🚀 クイックスタート
+
+### 初回 (clone + セットアップ)
+
+**Windows (PowerShell):**
+```powershell
+cd C:\dev
+git clone https://github.com/or3dayo/vo_fix.git
+cd vo_fix
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
+```
+
+**macOS / Linux:**
+```bash
+cd ~/dev
+git clone https://github.com/or3dayo/vo_fix.git
+cd vo_fix
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python app.py
+```
+
+ブラウザで http://localhost:7860 が開きます。
+
+### 更新 (2回目以降)
+
+**Windows:**
+```powershell
+cd C:\dev\vo_fix
+git pull
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
+```
+
+**macOS / Linux:**
+```bash
+cd ~/dev/vo_fix
+git pull
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python app.py
+```
+
+> Python 3.11 が必要。トラブル時は下記「[トラブルシューティング](#トラブルシューティング)」へ。  
+> 詳しいセットアップ手順は「[セットアップ](#セットアップ)」へ。
+
+---
+
 ## できること
 
 - **ピッチ揺らぎ注入**: pyworld で f0 を分解 → 微小な drift を足して再合成。均一すぎるピッチに人間味
