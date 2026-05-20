@@ -409,6 +409,20 @@ Applio (https://applio.org/) はこれらを全部解決済みのワンクリッ
 
 将来安定した pip RVC パッケージが出たら `vo_fix/rvc.py` を差し替えるだけで全体が動くよう、CLI/UI 側にはすでに `--rvc-model` フックを残してあります。
 
+## 出力品質(サンプルレート / ビット深度)
+
+**デフォルトは入力品質をそのまま保持** します。24-bit/48kHz の素材を読ませれば 24-bit/48kHz で出力されます。CLI で `--target-sr`, `--output-subtype` を指定するか、Gradio UI の「出力品質」アコーディオンで個別に変更可能です。
+
+| 設定 | 動作 |
+|---|---|
+| デフォルト | 入力 sample rate と bit depth をそのまま保持 |
+| `--target-sr 48000` | 強制リサンプル(必要なら 44100 / 88200 / 96000 等) |
+| `--output-subtype PCM_24` | 24-bit PCM で書き出し |
+| `--output-subtype FLOAT` | **32-bit float で書き出し**(最高精度、DAW持ち込み向け) |
+| `--output-subtype PCM_16` | 16-bit PCM (CD品質、サイズ重視) |
+
+**過去のユーザープリセットに 44100 が記録されている場合**: `~/.vo_fix/presets/<name>.json` を開いて `target_sr` を `null` に書き換えると入力保持に戻せます。
+
 ## ライセンス
 
 GPL-3.0 (詳細は [LICENSE](LICENSE))。

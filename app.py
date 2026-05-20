@@ -16,7 +16,7 @@ import soundfile as sf
 
 from vo_fix.effects import EffectsConfig
 from vo_fix.humanize import HumanizeConfig
-from vo_fix.io import load_wav
+from vo_fix.io import SUBTYPE_LABELS, load_wav, save_wav
 from vo_fix.operation_log import OperationLog
 from vo_fix.pipeline import PRESETS, ProcessConfig, RXConfig, process_array
 from vo_fix.theme import CUSTOM_CSS, build_theme
@@ -61,7 +61,38 @@ PARAM_FIELDS = [
     "consonant_amount", "consonant_sens",
     # vocal: breath
     "breath_on", "breath_threshold", "breath_min_silence", "breath_intensity",
+    # output quality
+    "output_sr_choice", "output_subtype_choice",
 ]
+
+# Sample rate dropdown options. "preserve" maps to None in ProcessConfig.
+SR_CHOICES = ["入力を保持", "44100", "48000", "88200", "96000"]
+# Bit depth dropdown options.
+SUBTYPE_CHOICES = ["入力を保持"] + list(SUBTYPE_LABELS.keys())
+
+
+def _sr_choice_to_value(choice: str) -> int | None:
+    if choice == "入力を保持" or not choice:
+        return None
+    return int(choice)
+
+
+def _subtype_choice_to_value(choice: str) -> str | None:
+    if choice == "入力を保持" or not choice:
+        return None
+    return choice
+
+
+def _value_to_sr_choice(v: int | None) -> str:
+    if v is None:
+        return "入力を保持"
+    return str(v)
+
+
+def _value_to_subtype_choice(v: str | None) -> str:
+    if v is None:
+        return "入力を保持"
+    return v
 
 
 def _params_to_config(preset_name: str, params: dict) -> tuple[ProcessConfig, ProcessConfig]:
@@ -121,7 +152,8 @@ def _params_to_config(preset_name: str, params: dict) -> tuple[ProcessConfig, Pr
             declick_sensitivity=float(params["rx_declick_sens"]),
             plugin_dir=params["rx_plugin_dir"] or None,
         ),
-        target_sr=base.target_sr,
+        target_sr=_sr_choice_to_value(params["output_sr_choice"]),
+        output_subtype=_subtype_choice_to_value(params["output_subtype_choice"]),
         skip_humanize=bool(params["skip_humanize"]),
         skip_effects=bool(params["skip_effects"]),
     )
@@ -176,6 +208,8 @@ def _config_to_param_values(p: ProcessConfig) -> list:
         p.vocal.breath_threshold_db,
         p.vocal.breath_min_silence_s,
         p.vocal.breath_intensity,
+        _value_to_sr_choice(p.target_sr),
+        _value_to_subtype_choice(p.output_subtype),
     ]
 
 
@@ -195,10 +229,16 @@ def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="",
 
     t0 = time.perf_counter()
     try:
-        samples, sr = load_wav(audio_path, target_sr=cfg.target_sr)
+        samples, sr, meta = load_wav(audio_path, target_sr=cfg.target_sr)
         out, out_sr = process_array(samples, sr, cfg)
         out_path = Path(tempfile.mkdtemp()) / "vo_fix_out.wav"
-        sf.write(str(out_path), out.astype(np.float32), out_sr, subtype="PCM_16")
+        used_subtype = save_wav(
+            out_path,
+            out,
+            out_sr,
+            subtype=cfg.output_subtype,
+            input_subtype=meta.subtype,
+        )
         elapsed = time.perf_counter() - t0
         OP_LOG.record_run(
             preset_name=preset,
@@ -208,7 +248,10 @@ def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="",
             output_path=str(out_path),
             duration_seconds=elapsed,
         )
-        status_msg = f"完了 — {len(out)/out_sr:.2f}s @ {out_sr}Hz  (処理時間 {elapsed:.2f}s)"
+        status_msg = (
+            f"完了 — {len(out)/out_sr:.2f}s @ {out_sr}Hz / {used_subtype}"
+            f"  (入力: {meta.sample_rate}Hz / {meta.subtype}, 処理 {elapsed:.2f}s)"
+        )
         return str(out_path), status_msg, OP_LOG.as_text()
     except Exception as e:
         return None, f"エラー: {e}", OP_LOG.as_text()
@@ -603,6 +646,31 @@ def build_ui():
                         info=f"OS別デフォルト: {default_paths_str}",
                     )
 
+                with gr.Accordion("出力品質 (サンプルレート / ビット深度)", open=False):
+                    gr.Markdown(
+                        "### 機能説明: 出力品質\n"
+                        "**入力ファイルの品質をそのまま保持** するのがデフォルト。"
+                        "24-bit/48kHz の素材を読ませれば 24-bit/48kHz で出ます。"
+                        "16-bit/44.1kHz への自動変換は **しません**。\n\n"
+                        "- **サンプルレート保持**: 「入力を保持」のままにしておく(推奨)\n"
+                        "- **ビット深度保持**: 同上。32-bit float を選べばさらに高精度で書き出せる"
+                    )
+                    output_sr_choice = gr.Dropdown(
+                        choices=SR_CHOICES,
+                        value="入力を保持",
+                        label="サンプルレート",
+                        info="「入力を保持」のままが推奨。SUNO は通常 48kHz、CD は 44100",
+                    )
+                    output_subtype_choice = gr.Dropdown(
+                        choices=SUBTYPE_CHOICES,
+                        value="入力を保持",
+                        label="ビット深度 (subtype)",
+                        info=(
+                            "PCM_16=16-bit CD品質 / PCM_24=24-bit スタジオ標準 / "
+                            "FLOAT=32-bit float 最高品質。DAW に持ち込むなら 24-bit か FLOAT"
+                        ),
+                    )
+
                 with gr.Accordion("RVC 声質変換 (オプション)", open=False):
                     gr.Markdown(
                         "⚠️ vo_fix は RVC を内蔵していません。声質変換は Applio (https://applio.org/) で済ませてから vo_fix に渡すワークフローを推奨。"
@@ -645,6 +713,7 @@ def build_ui():
             formant_shift, gender_shift,
             consonant_amount, consonant_sens,
             breath_on, breath_threshold, breath_min_silence, breath_intensity,
+            output_sr_choice, output_subtype_choice,
         ]
         assert len(all_param_inputs) == len(PARAM_FIELDS), (
             f"UI/schema mismatch: {len(all_param_inputs)} inputs vs "

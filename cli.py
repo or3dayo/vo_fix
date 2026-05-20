@@ -33,7 +33,8 @@ from vo_fix.vocal_processing import VocalProcessingConfig
 @click.option("--reverb-mix", type=float, default=None, help="Reverb wet (0-1)")
 @click.option("--reverb-room", type=float, default=None, help="Reverb room size (0-1)")
 @click.option("--presence-db", type=float, default=None, help="3 kHz peak boost (dB)")
-@click.option("--target-sr", type=int, default=None, help="Target sample rate")
+@click.option("--target-sr", type=int, default=None, help="Output sample rate. Omit to PRESERVE the input rate (recommended). Pass 44100 / 48000 etc to force resample.")
+@click.option("--output-subtype", type=click.Choice(["PCM_16", "PCM_24", "FLOAT", "preserve"], case_sensitive=False), default="preserve", help="Output bit depth. 'preserve' = match input (default). PCM_16/PCM_24/FLOAT to force.")
 @click.option("--rx-denoise", type=float, default=None, help="RX Voice De-noise reduction in dB (0-20). Enables the module.")
 @click.option("--rx-declick", type=float, default=None, help="RX De-click sensitivity (0.5-10). Enables the module.")
 @click.option("--rx-plugin-dir", type=click.Path(file_okay=False), default=None, help="Override iZotope VST3 directory")
@@ -89,6 +90,7 @@ def main(
     reverb_room: float | None,
     presence_db: float | None,
     target_sr: int | None,
+    output_subtype: str,
     rx_denoise: float | None,
     rx_declick: float | None,
     rx_plugin_dir: str | None,
@@ -150,6 +152,8 @@ def main(
         e.presence_db = presence_db
     if target_sr is not None:
         cfg.target_sr = target_sr
+    if output_subtype and output_subtype.lower() != "preserve":
+        cfg.output_subtype = output_subtype.upper()
     if rx_denoise is not None:
         cfg.rx.voice_denoise_enabled = True
         cfg.rx.voice_denoise_reduction_db = rx_denoise

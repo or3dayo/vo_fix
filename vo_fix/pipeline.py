@@ -41,7 +41,19 @@ class ProcessConfig:
     rvc_model_path: str | None = None
     rvc_index_path: str | None = None
     rvc_pitch_semitones: float = 0.0
-    target_sr: int = 44100
+
+    target_sr: int | None = None
+    """Output sample rate. **None = preserve the input's sample rate.**
+    Older saved presets may have 44100 here — set them to None to stop
+    downsampling 48/96 kHz inputs.
+    """
+
+    output_subtype: str | None = None
+    """soundfile subtype for the output wav. **None = preserve the input's
+    bit depth** (e.g. PCM_24 stays PCM_24). Common explicit values:
+    'PCM_16', 'PCM_24', 'FLOAT'.
+    """
+
     skip_humanize: bool = False
     skip_effects: bool = False
 
@@ -147,10 +159,11 @@ def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[
             model_path=config.rvc_model_path,
             index_path=config.rvc_index_path,
             pitch_semitones=config.rvc_pitch_semitones,
-            target_sr=config.target_sr,
+            target_sr=config.target_sr or cur_sr,
         )
 
-    if cur_sr != config.target_sr:
+    # Only resample if the user explicitly asked for a different rate
+    if config.target_sr is not None and cur_sr != config.target_sr:
         import librosa
 
         out = librosa.resample(out, orig_sr=cur_sr, target_sr=config.target_sr)
@@ -174,7 +187,13 @@ def process(
     input_path: str | Path, output_path: str | Path, config: ProcessConfig | None = None
 ) -> Path:
     cfg = config or get_preset("natural")
-    samples, sr = load_wav(input_path, target_sr=cfg.target_sr)
+    samples, sr, meta = load_wav(input_path, target_sr=cfg.target_sr)
     out, out_sr = process_array(samples, sr, cfg)
-    save_wav(output_path, out, out_sr)
+    save_wav(
+        output_path,
+        out,
+        out_sr,
+        subtype=cfg.output_subtype,
+        input_subtype=meta.subtype,
+    )
     return Path(output_path)
