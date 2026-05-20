@@ -7,6 +7,7 @@ Opens http://localhost:7860
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 
 import gradio as gr
@@ -16,38 +17,37 @@ import soundfile as sf
 from vo_fix.effects import EffectsConfig
 from vo_fix.humanize import HumanizeConfig
 from vo_fix.io import load_wav
+from vo_fix.operation_log import OperationLog
 from vo_fix.pipeline import PRESETS, ProcessConfig, RXConfig, process_array
+from vo_fix.user_presets import (
+    all_preset_names,
+    delete_user_preset,
+    list_user_presets,
+    resolve_preset,
+    save_user_preset,
+)
 from vo_fix.vst import DEFAULT_RX_DIR, DEFAULT_RX_DIRS, find_rx_plugins
 
+# Single shared log for the running app instance. Gradio is single-process
+# so we don't need locking — but multiple browser tabs share state, which
+# is the right behavior here ("activity feed for this vo_fix instance").
+OP_LOG = OperationLog()
 
-def run(
-    audio_path,
-    preset,
-    jitter_cents,
-    vibrato_depth,
-    vibrato_rate,
-    shimmer,
-    high_cut,
-    presence_db,
-    saturation,
-    reverb_mix,
-    reverb_room,
-    skip_humanize,
-    skip_effects,
-    rx_denoise_on,
-    rx_denoise_db,
-    rx_declick_on,
-    rx_declick_sens,
-    rx_plugin_dir,
-    rvc_model_path,
-    rvc_index_path,
-    rvc_pitch,
-):
-    if audio_path is None:
-        return None, "音声ファイルをアップロードしてください"
 
-    base = PRESETS[preset]
-    cfg = ProcessConfig(
+def _build_current_config(
+    preset_name,
+    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+    high_cut, presence_db, saturation, reverb_mix, reverb_room,
+    skip_humanize, skip_effects,
+    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+) -> tuple[ProcessConfig, ProcessConfig]:
+    """Return (base_preset_config, config_with_overrides).
+
+    `base` is the unmodified preset (used for diffing in the log).
+    `current` reflects the slider state on top of it.
+    """
+    base = resolve_preset(preset_name)
+    current = ProcessConfig(
         humanize=HumanizeConfig(
             jitter_cents=float(jitter_cents),
             vibrato_depth_cents=float(vibrato_depth),
@@ -74,23 +74,55 @@ def run(
         skip_humanize=skip_humanize,
         skip_effects=skip_effects,
     )
+    return base, current
+
+
+def run(
+    audio_path,
+    preset,
+    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+    high_cut, presence_db, saturation, reverb_mix, reverb_room,
+    skip_humanize, skip_effects,
+    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+    rvc_model_path, rvc_index_path, rvc_pitch,
+):
+    if audio_path is None:
+        return None, "音声ファイルをアップロードしてください", OP_LOG.as_text()
+
+    base, cfg = _build_current_config(
+        preset,
+        jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+        high_cut, presence_db, saturation, reverb_mix, reverb_room,
+        skip_humanize, skip_effects,
+        rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+    )
     if rvc_model_path:
         cfg.rvc_model_path = rvc_model_path
         cfg.rvc_index_path = rvc_index_path or None
         cfg.rvc_pitch_semitones = float(rvc_pitch)
 
+    t0 = time.perf_counter()
     try:
         samples, sr = load_wav(audio_path, target_sr=cfg.target_sr)
         out, out_sr = process_array(samples, sr, cfg)
         out_path = Path(tempfile.mkdtemp()) / "vo_fix_out.wav"
         sf.write(str(out_path), out.astype(np.float32), out_sr, subtype="PCM_16")
-        return str(out_path), f"完了 — {len(out)/out_sr:.2f}s @ {out_sr}Hz"
+        elapsed = time.perf_counter() - t0
+        OP_LOG.record_run(
+            preset_name=preset,
+            preset_config=base,
+            actual_config=cfg,
+            input_path=audio_path,
+            output_path=str(out_path),
+            duration_seconds=elapsed,
+        )
+        status_msg = f"完了 — {len(out)/out_sr:.2f}s @ {out_sr}Hz  (処理時間 {elapsed:.2f}s)"
+        return str(out_path), status_msg, OP_LOG.as_text()
     except Exception as e:
-        return None, f"エラー: {e}"
+        return None, f"エラー: {e}", OP_LOG.as_text()
 
 
-def load_preset_values(preset_name):
-    p = PRESETS[preset_name]
+def _preset_to_slider_values(p: ProcessConfig):
     return (
         p.humanize.jitter_cents,
         p.humanize.vibrato_depth_cents,
@@ -103,21 +135,77 @@ def load_preset_values(preset_name):
         p.effects.reverb_room,
         p.skip_humanize,
         p.skip_effects,
+        p.rx.voice_denoise_enabled,
+        p.rx.voice_denoise_reduction_db,
+        p.rx.declick_enabled,
+        p.rx.declick_sensitivity,
     )
+
+
+def load_preset_values(preset_name):
+    p = resolve_preset(preset_name)
+    return _preset_to_slider_values(p)
+
+
+def save_current_as_preset(
+    new_name, preset,
+    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+    high_cut, presence_db, saturation, reverb_mix, reverb_room,
+    skip_humanize, skip_effects,
+    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+):
+    new_name = (new_name or "").strip()
+    if not new_name:
+        return gr.update(), "⚠️ プリセット名を入力してください"
+    _, cfg = _build_current_config(
+        preset,
+        jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+        high_cut, presence_db, saturation, reverb_mix, reverb_room,
+        skip_humanize, skip_effects,
+        rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+    )
+    try:
+        path = save_user_preset(new_name, cfg)
+        choices = all_preset_names()
+        return (
+            gr.update(choices=choices, value=f"user: {new_name}"),
+            f"✅ 保存しました: {path.name}",
+        )
+    except Exception as e:
+        return gr.update(), f"❌ 保存失敗: {e}"
+
+
+def delete_current_preset(preset):
+    if not preset.startswith("user: "):
+        return gr.update(), "⚠️ 組み込みプリセットは削除できません"
+    name = preset[len("user: ") :]
+    deleted = delete_user_preset(name)
+    choices = all_preset_names()
+    if deleted:
+        return gr.update(choices=choices, value="natural"), f"🗑 削除しました: {name}"
+    return gr.update(choices=choices), f"⚠️ 見つかりませんでした: {name}"
+
+
+def clear_log():
+    OP_LOG.clear()
+    return OP_LOG.as_text()
 
 
 def build_ui():
     with gr.Blocks(title="vo_fix — AI歌声ナチュラライザー") as demo:
-        gr.Markdown("# vo_fix — AI歌声ナチュラライザー\nSUNO等のAI歌声に揺らぎとミックス処理を足して人間っぽくします。")
+        gr.Markdown(
+            "# vo_fix — AI歌声ナチュラライザー\n"
+            "SUNO等のAI歌声に揺らぎとミックス処理を足して人間っぽくします。"
+        )
 
         with gr.Row():
             with gr.Column():
                 audio_in = gr.Audio(label="入力 (wav)", type="filepath")
                 preset = gr.Dropdown(
-                    choices=list(PRESETS.keys()),
+                    choices=all_preset_names(),
                     value="natural",
                     label="プリセット",
-                    info="出発点。下のスライダーを動かすと上書きされる",
+                    info="出発点。下のスライダーを動かすと上書きされる。`user:` が付くものはあなたの保存したカスタム",
                 )
                 gr.Markdown(
                     "**プリセットの使い分け**  \n"
@@ -126,6 +214,21 @@ def build_ui():
                     "💜 **intimate** — 揺らぎ強め + リバーブ深め。バラード・ささやき・しっとり系  \n"
                     "💡 **polished** — 揺らぎ控えめ + 高域明るめ + リバーブ薄め。前に出したいポップス向け"
                 )
+
+                with gr.Accordion("マイプリセット (保存・削除)", open=False):
+                    gr.Markdown(
+                        "_現在のスライダー値に名前を付けて `~/.vo_fix/presets/` に保存。"
+                        "次回起動時にもプリセット一覧に出ます。_"
+                    )
+                    new_preset_name = gr.Textbox(
+                        label="保存名",
+                        placeholder="例: my-ballad / suno-pop-vibe",
+                        info="保存ボタンで現在のスライダー全部を記録",
+                    )
+                    with gr.Row():
+                        save_btn = gr.Button("💾 現在の設定を保存", variant="secondary")
+                        delete_btn = gr.Button("🗑 選択中のuser:を削除", variant="secondary")
+                    preset_status = gr.Textbox(label="プリセット操作結果", interactive=False)
 
                 with gr.Accordion("揺らぎ (Humanize)", open=True):
                     gr.Markdown("_AI歌声の「均一すぎる」ピッチと音量に、人間の声の有機的な揺れを加える段。_")
@@ -242,26 +345,63 @@ def build_ui():
                 audio_out = gr.Audio(label="出力", type="filepath")
                 status = gr.Textbox(label="ステータス", interactive=False)
 
+                with gr.Accordion("操作ログ (履歴)", open=True):
+                    gr.Markdown(
+                        "_変換ごとに「どのプリセットから何を上書きしたか」を記録。"
+                        "実体は `~/.vo_fix/logs/session-YYYYMMDD.jsonl` にも追記されます。_"
+                    )
+                    op_log_box = gr.Textbox(
+                        value=OP_LOG.as_text(),
+                        label="変換履歴",
+                        lines=12,
+                        max_lines=30,
+                        interactive=False,
+                    )
+                    clear_log_btn = gr.Button("ログをクリア", size="sm")
+
+        # --- Wiring ---
+
+        # All slider/input components for save/run (factored out for reuse)
+        all_param_inputs = [
+            jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+            high_cut, presence_db, saturation, reverb_mix, reverb_room,
+            skip_humanize, skip_effects,
+            rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+        ]
+        slider_outputs = [
+            jitter_cents, vibrato_depth, vibrato_rate, shimmer,
+            high_cut, presence_db, saturation, reverb_mix, reverb_room,
+            skip_humanize, skip_effects,
+            rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens,
+        ]
+
         preset.change(
             load_preset_values,
             inputs=[preset],
-            outputs=[
-                jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-                high_cut, presence_db, saturation, reverb_mix, reverb_room,
-                skip_humanize, skip_effects,
-            ],
+            outputs=slider_outputs,
         )
+
+        save_btn.click(
+            save_current_as_preset,
+            inputs=[new_preset_name, preset, *all_param_inputs],
+            outputs=[preset, preset_status],
+        )
+
+        delete_btn.click(
+            delete_current_preset,
+            inputs=[preset],
+            outputs=[preset, preset_status],
+        )
+
+        clear_log_btn.click(clear_log, outputs=[op_log_box])
 
         run_btn.click(
             run,
             inputs=[
-                audio_in, preset, jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-                high_cut, presence_db, saturation, reverb_mix, reverb_room,
-                skip_humanize, skip_effects,
-                rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+                audio_in, preset, *all_param_inputs,
                 rvc_model_path, rvc_index_path, rvc_pitch,
             ],
-            outputs=[audio_out, status],
+            outputs=[audio_out, status, op_log_box],
         )
 
     return demo
