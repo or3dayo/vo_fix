@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Audio I/O
+samples/*.wav
+samples/*.mp3
+samples/*.flac
+out/
+!samples/.gitkeep
+
+# RVC models
+models/
+*.pth
+*.index
+*.onnx
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
