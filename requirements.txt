@@ -1,5 +1,7 @@
 # vo_fix runs on Python 3.11. pyworld + librosa + numba stack lags newer
-# Python releases by 6–12 months — 3.12+ wheels are spotty.
+# Python releases by 6-12 months; 3.12+ wheels are spotty.
+# (ASCII-only on purpose: older pip on JP Windows reads files as cp932
+#  and chokes on non-ASCII chars in requirements files.)
 numpy>=1.26,<2.2
 scipy>=1.11
 soundfile>=0.12

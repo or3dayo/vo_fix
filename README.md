@@ -63,8 +63,12 @@ py -3.11 --version    # 3.11.x が出ればOK
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip       # ← 必ずやる
 pip install -r requirements.txt
 ```
+
+> **なぜ pip を先にアップグレード?**  
+> Python 3.11 同梱の pip は古め (22.x)。日本語Windowsだと requirements.txt を cp932 で読もうとして `UnicodeDecodeError` で落ちることがあります。最新 pip (24+) ならUTF-8で読むので問題なし。
 
 PowerShell の実行ポリシーで Activate.ps1 が弾かれる場合:
 
@@ -255,6 +259,7 @@ GPL-3.0 (詳細は [LICENSE](LICENSE))。
 | `py -3.11` が動かない | Python 3.11未インストール。`py install 3.11` で追加(py launcher必須) |
 | `Activate.ps1` が `スクリプトの実行が無効` | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` を一度実行 |
 | `pip install` が途中で失敗 | OneDrive配下に置いていないか確認。ファイルロック衝突の主因。`C:\dev\vo_fix\` 等へ移動 |
+| `UnicodeDecodeError: 'cp932' codec can't decode...` | pip が古い (22.x) のが原因。`python -m pip install --upgrade pip` を実行してから retry |
 | `pyworld` の import エラー | Python 3.11 を使っているか確認。3.12+ では wheel がなくビルド失敗 |
 
 ### Git 運用系
