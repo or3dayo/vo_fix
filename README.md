@@ -34,10 +34,12 @@ vo_fix (揺らぎ + ミックス処理)
 ### 必要なもの
 
 - **Python 3.11** (依存ライブラリの wheel 都合。3.12+ では pyworld 等の wheel が無くビルド失敗)
-- **Git** (clone するため。無ければ `winget install --id Git.Git` か https://git-scm.com/download/win から)
-- **Windows** (RX VST 統合は Windows パス前提。macOS/Linux でも本体は動くが RX 部分は要パス変更)
+- **Git** (clone するため)
+- **Windows / macOS / Linux** いずれも本体は動作。RX 統合は Windows と macOS で利用可能 (Linux は iZotope 非対応)
 
-### 1. ダウンロード(git clone)
+### Windows でセットアップ
+
+#### 1. ダウンロード(git clone)
 
 ```powershell
 cd C:\dev               # 配置先(下記「配置先の推奨」参照)
@@ -45,9 +47,9 @@ git clone https://github.com/or3dayo/vo_fix.git
 cd vo_fix
 ```
 
-> ZIP DL (Code → Download ZIP) でもOKですが、後から `git pull` で更新できなくなるので **git clone を強く推奨** します。
+> ZIP DL (Code → Download ZIP) でもOKですが、後から `git pull` で更新できなくなるので **git clone を強く推奨** します。Git が無い場合: `winget install --id Git.Git` か https://git-scm.com/download/win から。
 
-### 2. Python 3.11 を準備
+#### 2. Python 3.11 を準備
 
 Python 3.13+ が入っていれば py launcher 経由で 3.11 を追加できます:
 
@@ -58,54 +60,111 @@ py -3.11 --version    # 3.11.x が出ればOK
 
 3.13 以前を使っている場合は https://www.python.org/downloads/release/python-3119/ から手動 DL。インストール時 **Add to PATH** にチェック。
 
-### 3. venv 作成と依存インストール
+#### 3. venv 作成と依存インストール
 
 ```powershell
 py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip       # ← 必ずやる
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-> **なぜ pip を先にアップグレード?**  
-> Python 3.11 同梱の pip は古め (22.x)。日本語Windowsだと requirements.txt を cp932 で読もうとして `UnicodeDecodeError` で落ちることがあります。最新 pip (24+) ならUTF-8で読むので問題なし。
+> **なぜ venv の python をフルパスで呼ぶの?**  
+> 裸の `pip` や `python` は PATH 上の別バージョン(よくあるのは Microsoft Store経由でインストールされた Python 3.14 等)を掴むことがあります。それだと numpy 等が wheel 無しでビルド失敗します。フルパスなら確実に venv の 3.11 を使えます。
 
-PowerShell の実行ポリシーで Activate.ps1 が弾かれる場合:
+> Activate を使いたい場合: `.\.venv\Scripts\Activate.ps1`(`.\` ピリオド・バックスラッシュ・`.venv` の3パート)。実行ポリシーで弾かれたら一度だけ `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`。
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+### macOS でセットアップ
+
+#### 1. ダウンロード(git clone)
+
+```bash
+cd ~/dev                # 無ければ mkdir -p ~/dev してから
+git clone https://github.com/or3dayo/vo_fix.git
+cd vo_fix
 ```
 
-(これは一度だけでOK。以後の Python セッションすべてに効きます)
+#### 2. Python 3.11 を準備
+
+Homebrew が手軽:
+
+```bash
+brew install python@3.11
+python3.11 --version    # 3.11.x が出ればOK
+```
+
+pyenv 派なら `pyenv install 3.11.9 && pyenv local 3.11.9` でもOK。
+
+#### 3. venv 作成と依存インストール
+
+```bash
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+Activate を使う場合: `source .venv/bin/activate`。
+
+### Linux でセットアップ
+
+Ubuntu/Debian の例:
+
+```bash
+sudo apt install python3.11 python3.11-venv git
+git clone https://github.com/or3dayo/vo_fix.git
+cd vo_fix
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+RX VST3 は Linux 非対応(iZotope が Linux ビルドを提供していない)。揺らぎ + エフェクトのみ使用可能。
 
 ### 配置先の推奨
 
-| 場所 | おすすめ度 | 理由 |
+| OS | おすすめ | 避ける |
 |---|---|---|
-| `C:\dev\vo_fix\` | ◎ 第一選択 | 短い・スペースなし・OneDriveの外。安牌 |
-| `C:\repos\vo_fix\`, `D:\dev\vo_fix\` | ◎ 同等 | 好みで |
-| `C:\Users\<name>\Documents\...` | ⚠️ 注意 | 多くの日本語Windowsで OneDrive 同期対象。`.venv` (数百MB) も同期されて遅くなる |
-| `C:\Users\<name>\OneDrive\...` | ❌ 避ける | 同上、`pip install` 中にファイルロック衝突で失敗することも |
-| `C:\Program Files\...` | ❌ 避ける | UAC で `pip install` が弾かれる |
-| パスに日本語/スペース | ⚠️ 注意 | 通常動くが一部C拡張で稀にエラー |
+| **Windows** | `C:\dev\vo_fix\`, `D:\dev\vo_fix\` 等の短い場所 | `OneDrive\...`(同期衝突)、`Program Files`(UAC)、日本語/スペース入りパス |
+| **macOS** | `~/dev/vo_fix`, `~/projects/vo_fix` | iCloud Drive 配下(`~/Documents/...` 等がそうなっていることあり) |
+| **Linux** | `~/dev/vo_fix`, `~/src/vo_fix` | (特になし) |
+
+クラウド同期フォルダ(OneDrive / iCloud / Dropbox)に `.venv` を置くと、数百MBの同期で重くなったり、ファイルロックで `pip install` が失敗します。
+
+### Windows ⇄ macOS/Linux コマンド対応表
+
+本ドキュメント中の Windows コマンドを他OSで読み替える表:
+
+| Windows (PowerShell) | macOS / Linux (bash・zsh) |
+|---|---|
+| `py -3.11 -m venv .venv` | `python3.11 -m venv .venv` |
+| `.\.venv\Scripts\Activate.ps1` | `source .venv/bin/activate` |
+| `.\.venv\Scripts\python.exe app.py` | `./.venv/bin/python app.py` |
+| `.\.venv\Scripts\python.exe cli.py ...` | `./.venv/bin/python cli.py ...` |
+| `Remove-Item -Recurse -Force .venv` | `rm -rf .venv` |
+
+Activate 済みの場合はどちらも `python app.py` でOK。
 
 ### 更新の取り込み(後日)
 
 vo_fix が更新されたら **再DL不要**、`git pull` で最新化:
 
-```powershell
-cd C:\dev\vo_fix
+```bash
+# Windows / macOS / Linux 共通
+cd <vo_fixのパス>
 git pull
 ```
 
-依存関係が増えていたら追加で:
-
+依存関係が増えていたら(Windows):
 ```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+macOS / Linux:
+```bash
+./.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## 使い方
+
+> 以下は Windows (PowerShell) の例。macOS / Linux の場合は `.\.venv\Scripts\python.exe` を `./.venv/bin/python` に読み替えてください。詳細は上の [Windows ⇄ macOS/Linux コマンド対応表](#windows--macoslinux-コマンド対応表) を参照。
 
 ### Gradio UI (推奨)
 
@@ -154,7 +213,15 @@ RX 8 以降を持っている場合、Voice De-noise と De-click を humanize �
 |---|---|---|
 | `--rx-denoise DB` | Voice De-noise reduction | 4–10 dB |
 | `--rx-declick SENS` | De-click sensitivity | 2–5 |
-| `--rx-plugin-dir PATH` | VST3 ディレクトリ上書き | デフォルト `C:\Program Files\Common Files\VST3\iZotope\` |
+| `--rx-plugin-dir PATH` | VST3 ディレクトリ上書き | OSに応じて自動検出(下記) |
+
+**OS別の RX VST3 デフォルト探索先** (自動判定):
+
+| OS | 探索パス |
+|---|---|
+| Windows | `C:\Program Files\Common Files\VST3\iZotope\` |
+| macOS | `/Library/Audio/Plug-Ins/VST3/iZotope/` (システム) と `~/Library/Audio/Plug-Ins/VST3/iZotope/` (ユーザー) を順に探索 |
+| Linux | (iZotope非対応) |
 
 **処理順**: RX クリーニング → humanize → エフェクト。先にノイズを取って、後で揺らぎを足すのが正解(逆だと De-noise が揺らぎをノイズ扱いして削ってしまう)。
 

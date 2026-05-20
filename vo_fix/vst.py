@@ -11,6 +11,7 @@ repeated UI runs don't re-load. Pedalboard plugins keep internal state
 from __future__ import annotations
 
 import logging
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -18,7 +19,32 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RX_DIR = Path(r"C:\Program Files\Common Files\VST3\iZotope")
+
+def _default_rx_dirs() -> list[Path]:
+    """Standard iZotope VST3 install locations by OS.
+
+    Multiple paths can be returned (e.g. macOS has both system-wide and
+    user-local plugin folders). They are searched in order, first match wins.
+    """
+    if sys.platform == "win32":
+        return [Path(r"C:\Program Files\Common Files\VST3\iZotope")]
+    if sys.platform == "darwin":
+        return [
+            Path("/Library/Audio/Plug-Ins/VST3/iZotope"),
+            Path.home() / "Library" / "Audio" / "Plug-Ins" / "VST3" / "iZotope",
+        ]
+    # Linux: RX doesn't officially support it, but allow a sane override target
+    return [
+        Path.home() / ".vst3" / "iZotope",
+        Path("/usr/lib/vst3/iZotope"),
+    ]
+
+
+DEFAULT_RX_DIRS: list[Path] = _default_rx_dirs()
+
+#: Primary default for display / single-path callers. macOS/Linux may have
+#: additional fall-back paths in :data:`DEFAULT_RX_DIRS`.
+DEFAULT_RX_DIR: Path = DEFAULT_RX_DIRS[0]
 
 KNOWN_RX_MODULES = {
     "voice_denoise": "RX 8 Voice De-noise.vst3",
@@ -28,31 +54,48 @@ KNOWN_RX_MODULES = {
 }
 
 
-def find_rx_plugins(base_dir: str | Path | None = None) -> dict[str, Path]:
-    """Return a dict of {module_key: full_path} for RX VST3s that exist.
-
-    Falls back to scanning the default path. Returns empty dict if none found.
-    """
-    base = Path(base_dir) if base_dir else DEFAULT_RX_DIR
-    if not base.exists():
-        return {}
+def _scan_one_dir(base: Path) -> dict[str, Path]:
+    """Look for known RX modules under `base`. Returns {module_key: path}."""
     found: dict[str, Path] = {}
+    if not base.exists():
+        return found
     for key, fname in KNOWN_RX_MODULES.items():
         p = base / fname
         if p.exists():
             found[key] = p
-        else:
-            # Tolerate version differences (RX 9, RX 10, RX 11)
-            for candidate in base.glob(fname.replace("RX 8 ", "RX * ")):
-                if candidate.exists():
-                    found[key] = candidate
-                    break
-            else:
-                # Last resort: search without version
-                stem = fname.replace("RX 8 ", "").replace(".vst3", "")
-                for candidate in base.glob(f"*{stem}*.vst3"):
-                    found[key] = candidate
-                    break
+            continue
+        # Tolerate version differences (RX 9, RX 10, RX 11)
+        matched = False
+        for candidate in base.glob(fname.replace("RX 8 ", "RX * ")):
+            if candidate.exists():
+                found[key] = candidate
+                matched = True
+                break
+        if matched:
+            continue
+        # Last resort: search without any version prefix
+        stem = fname.replace("RX 8 ", "").replace(".vst3", "")
+        for candidate in base.glob(f"*{stem}*.vst3"):
+            found[key] = candidate
+            break
+    return found
+
+
+def find_rx_plugins(base_dir: str | Path | None = None) -> dict[str, Path]:
+    """Return a dict of {module_key: full_path} for RX VST3s that exist.
+
+    If `base_dir` is given, only that directory is scanned. Otherwise the
+    OS-appropriate default locations are scanned in priority order
+    (system-wide first, user-local second on macOS).
+    """
+    if base_dir:
+        return _scan_one_dir(Path(base_dir))
+
+    found: dict[str, Path] = {}
+    for base in DEFAULT_RX_DIRS:
+        for key, path in _scan_one_dir(base).items():
+            # Earlier directories win — don't overwrite
+            found.setdefault(key, path)
     return found
 
 

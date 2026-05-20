@@ -17,7 +17,7 @@ from vo_fix.effects import EffectsConfig
 from vo_fix.humanize import HumanizeConfig
 from vo_fix.io import load_wav
 from vo_fix.pipeline import PRESETS, ProcessConfig, RXConfig, process_array
-from vo_fix.vst import DEFAULT_RX_DIR, find_rx_plugins
+from vo_fix.vst import DEFAULT_RX_DIR, DEFAULT_RX_DIRS, find_rx_plugins
 
 
 def run(
@@ -193,7 +193,12 @@ def build_ui():
                     if rx_found:
                         gr.Markdown(f"✅ 検出: {', '.join(rx_found.keys())}")
                     else:
-                        gr.Markdown(f"⚠️ RX VST3 が `{DEFAULT_RX_DIR}` に見つかりません。下のパス欄で指定してください。")
+                        searched = "\n".join(f"- `{p}`" for p in DEFAULT_RX_DIRS)
+                        gr.Markdown(
+                            "⚠️ RX VST3 が見つかりません。以下の標準パスを探索:\n"
+                            f"{searched}\n\n"
+                            "別の場所にインストールしている場合は下のパス欄で指定してください。"
+                        )
                     gr.Markdown(
                         "_素材を綺麗にしてから揺らぎを足す前処理段。**必ず humanize より前** に走ります。_"
                     )
@@ -217,9 +222,10 @@ def build_ui():
                         label="De-click sensitivity",
                         info="検出感度。2-3=控えめ / 4-5=標準 / 7+=やり過ぎ(子音まで丸まる)",
                     )
+                    default_paths_str = " / ".join(str(p) for p in DEFAULT_RX_DIRS)
                     rx_plugin_dir = gr.Textbox(
                         label="VST3 ディレクトリ (空欄でデフォルト)", value="",
-                        info=f"デフォルトは {DEFAULT_RX_DIR}",
+                        info=f"OS別デフォルト: {default_paths_str}",
                     )
 
                 with gr.Accordion("RVC 声質変換 (オプション)", open=False):
