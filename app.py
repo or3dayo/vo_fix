@@ -34,68 +34,134 @@ from vo_fix.vst import DEFAULT_RX_DIR, DEFAULT_RX_DIRS, find_rx_plugins
 OP_LOG = OperationLog()
 
 
-def _build_current_config(
-    preset_name,
-    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-    high_cut, presence_db, saturation, reverb_mix, reverb_room,
-    skip_humanize, skip_effects,
-    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
-) -> tuple[ProcessConfig, ProcessConfig]:
-    """Return (base_preset_config, config_with_overrides).
+# Ordered field names for the param payload. Defined once so the UI input
+# list and the runner can stay in sync.
+PARAM_FIELDS = [
+    # humanize
+    "jitter_cents", "vibrato_depth", "vibrato_rate", "shimmer",
+    # base effects
+    "high_cut", "presence_db", "saturation", "reverb_mix", "reverb_room",
+    # skip toggles
+    "skip_humanize", "skip_effects",
+    # RX
+    "rx_denoise_on", "rx_denoise_db", "rx_declick_on", "rx_declick_sens", "rx_plugin_dir",
+    # multi-band EQ
+    "eq_low_shelf", "eq_low_mid", "eq_high_mid", "eq_high_shelf",
+    # compressor
+    "comp_on", "comp_threshold", "comp_ratio", "comp_attack", "comp_release",
+    # de-esser
+    "deess_on", "deess_freq", "deess_threshold", "deess_ratio",
+    # chorus
+    "chorus_on", "chorus_rate", "chorus_depth", "chorus_mix",
+]
 
-    `base` is the unmodified preset (used for diffing in the log).
-    `current` reflects the slider state on top of it.
-    """
+
+def _params_to_config(preset_name: str, params: dict) -> tuple[ProcessConfig, ProcessConfig]:
+    """Build (base_preset_config, current_config_with_overrides) from a dict."""
     base = resolve_preset(preset_name)
     current = ProcessConfig(
         humanize=HumanizeConfig(
-            jitter_cents=float(jitter_cents),
-            vibrato_depth_cents=float(vibrato_depth),
-            vibrato_rate_hz=float(vibrato_rate),
-            shimmer=float(shimmer),
+            jitter_cents=float(params["jitter_cents"]),
+            vibrato_depth_cents=float(params["vibrato_depth"]),
+            vibrato_rate_hz=float(params["vibrato_rate"]),
+            shimmer=float(params["shimmer"]),
             jitter_rate_hz=base.humanize.jitter_rate_hz,
             shimmer_rate_hz=base.humanize.shimmer_rate_hz,
         ),
         effects=EffectsConfig(
-            high_cut_hz=float(high_cut),
-            presence_db=float(presence_db),
-            saturation=float(saturation),
-            reverb_mix=float(reverb_mix),
-            reverb_room=float(reverb_room),
+            high_cut_hz=float(params["high_cut"]),
+            presence_db=float(params["presence_db"]),
+            saturation=float(params["saturation"]),
+            reverb_mix=float(params["reverb_mix"]),
+            reverb_room=float(params["reverb_room"]),
+            # EQ
+            eq_low_shelf_db=float(params["eq_low_shelf"]),
+            eq_low_mid_db=float(params["eq_low_mid"]),
+            eq_high_mid_db=float(params["eq_high_mid"]),
+            eq_high_shelf_db=float(params["eq_high_shelf"]),
+            # Compressor
+            compressor_enabled=bool(params["comp_on"]),
+            compressor_threshold_db=float(params["comp_threshold"]),
+            compressor_ratio=float(params["comp_ratio"]),
+            compressor_attack_ms=float(params["comp_attack"]),
+            compressor_release_ms=float(params["comp_release"]),
+            # De-esser
+            deesser_enabled=bool(params["deess_on"]),
+            deesser_freq_hz=float(params["deess_freq"]),
+            deesser_threshold_db=float(params["deess_threshold"]),
+            deesser_ratio=float(params["deess_ratio"]),
+            # Chorus
+            chorus_enabled=bool(params["chorus_on"]),
+            chorus_rate_hz=float(params["chorus_rate"]),
+            chorus_depth=float(params["chorus_depth"]),
+            chorus_mix=float(params["chorus_mix"]),
         ),
         rx=RXConfig(
-            voice_denoise_enabled=bool(rx_denoise_on),
-            voice_denoise_reduction_db=float(rx_denoise_db),
-            declick_enabled=bool(rx_declick_on),
-            declick_sensitivity=float(rx_declick_sens),
-            plugin_dir=rx_plugin_dir or None,
+            voice_denoise_enabled=bool(params["rx_denoise_on"]),
+            voice_denoise_reduction_db=float(params["rx_denoise_db"]),
+            declick_enabled=bool(params["rx_declick_on"]),
+            declick_sensitivity=float(params["rx_declick_sens"]),
+            plugin_dir=params["rx_plugin_dir"] or None,
         ),
         target_sr=base.target_sr,
-        skip_humanize=skip_humanize,
-        skip_effects=skip_effects,
+        skip_humanize=bool(params["skip_humanize"]),
+        skip_effects=bool(params["skip_effects"]),
     )
     return base, current
 
 
-def run(
-    audio_path,
-    preset,
-    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-    high_cut, presence_db, saturation, reverb_mix, reverb_room,
-    skip_humanize, skip_effects,
-    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
-    rvc_model_path, rvc_index_path, rvc_pitch,
-):
+def _config_to_param_values(p: ProcessConfig) -> list:
+    """Pull current config values back into the slider value order (PARAM_FIELDS).
+
+    Used to populate the UI when a preset is selected. Order MUST match
+    PARAM_FIELDS exactly.
+    """
+    return [
+        p.humanize.jitter_cents,
+        p.humanize.vibrato_depth_cents,
+        p.humanize.vibrato_rate_hz,
+        p.humanize.shimmer,
+        p.effects.high_cut_hz,
+        p.effects.presence_db,
+        p.effects.saturation,
+        p.effects.reverb_mix,
+        p.effects.reverb_room,
+        p.skip_humanize,
+        p.skip_effects,
+        p.rx.voice_denoise_enabled,
+        p.rx.voice_denoise_reduction_db,
+        p.rx.declick_enabled,
+        p.rx.declick_sensitivity,
+        p.rx.plugin_dir or "",
+        p.effects.eq_low_shelf_db,
+        p.effects.eq_low_mid_db,
+        p.effects.eq_high_mid_db,
+        p.effects.eq_high_shelf_db,
+        p.effects.compressor_enabled,
+        p.effects.compressor_threshold_db,
+        p.effects.compressor_ratio,
+        p.effects.compressor_attack_ms,
+        p.effects.compressor_release_ms,
+        p.effects.deesser_enabled,
+        p.effects.deesser_freq_hz,
+        p.effects.deesser_threshold_db,
+        p.effects.deesser_ratio,
+        p.effects.chorus_enabled,
+        p.effects.chorus_rate_hz,
+        p.effects.chorus_depth,
+        p.effects.chorus_mix,
+    ]
+
+
+def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="", rvc_pitch=0.0):
     if audio_path is None:
         return None, "音声ファイルをアップロードしてください", OP_LOG.as_text()
 
-    base, cfg = _build_current_config(
-        preset,
-        jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-        high_cut, presence_db, saturation, reverb_mix, reverb_room,
-        skip_humanize, skip_effects,
-        rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
-    )
+    if len(param_values) < len(PARAM_FIELDS):
+        return None, f"内部エラー: パラメータ数 {len(param_values)} (期待 {len(PARAM_FIELDS)})", OP_LOG.as_text()
+
+    params = dict(zip(PARAM_FIELDS, param_values))
+    base, cfg = _params_to_config(preset, params)
     if rvc_model_path:
         cfg.rvc_model_path = rvc_model_path
         cfg.rvc_index_path = rvc_index_path or None
@@ -122,48 +188,28 @@ def run(
         return None, f"エラー: {e}", OP_LOG.as_text()
 
 
-def _preset_to_slider_values(p: ProcessConfig):
-    return (
-        p.humanize.jitter_cents,
-        p.humanize.vibrato_depth_cents,
-        p.humanize.vibrato_rate_hz,
-        p.humanize.shimmer,
-        p.effects.high_cut_hz,
-        p.effects.presence_db,
-        p.effects.saturation,
-        p.effects.reverb_mix,
-        p.effects.reverb_room,
-        p.skip_humanize,
-        p.skip_effects,
-        p.rx.voice_denoise_enabled,
-        p.rx.voice_denoise_reduction_db,
-        p.rx.declick_enabled,
-        p.rx.declick_sensitivity,
-    )
+def run_wrapper(*args):
+    """Gradio passes positional args. Split off the trailing RVC fields."""
+    audio_path, preset = args[0], args[1]
+    rvc_args = args[-3:]
+    param_values = args[2:-3]
+    return run(audio_path, preset, *param_values,
+               rvc_model_path=rvc_args[0],
+               rvc_index_path=rvc_args[1],
+               rvc_pitch=rvc_args[2])
 
 
 def load_preset_values(preset_name):
     p = resolve_preset(preset_name)
-    return _preset_to_slider_values(p)
+    return _config_to_param_values(p)
 
 
-def save_current_as_preset(
-    new_name, preset,
-    jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-    high_cut, presence_db, saturation, reverb_mix, reverb_room,
-    skip_humanize, skip_effects,
-    rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
-):
+def save_current_as_preset(new_name, preset, *param_values):
     new_name = (new_name or "").strip()
     if not new_name:
         return gr.update(), "⚠️ プリセット名を入力してください"
-    _, cfg = _build_current_config(
-        preset,
-        jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-        high_cut, presence_db, saturation, reverb_mix, reverb_room,
-        skip_humanize, skip_effects,
-        rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
-    )
+    params = dict(zip(PARAM_FIELDS, param_values))
+    _, cfg = _params_to_config(preset, params)
     try:
         path = save_user_preset(new_name, cfg)
         choices = all_preset_names()
@@ -258,7 +304,7 @@ def build_ui():
                         info="チェックすると揺らぎ処理を完全に飛ばす(エフェクトだけ掛けたい時用)",
                     )
 
-                with gr.Accordion("エフェクト", open=True):
+                with gr.Accordion("エフェクト (基本)", open=True):
                     gr.Markdown("_pedalboard による EQ・歪み・空間系。ミックス的な仕上げ。_")
                     high_cut = gr.Slider(
                         4000, 18000, value=9000, step=100,
@@ -288,7 +334,126 @@ def build_ui():
                     skip_effects = gr.Checkbox(
                         label="エフェクトをスキップ",
                         value=False,
-                        info="チェックすると EQ/歪み/リバーブを全て飛ばす(揺らぎだけ掛けたい時用)",
+                        info="チェックするとエフェクト段すべて(EQ/コンプ/サチュ/リバーブ等)を飛ばす",
+                    )
+
+                with gr.Accordion("詳細エフェクト: 4バンド EQ", open=False):
+                    gr.Markdown(
+                        "### 機能説明: マルチバンド・イコライザー\n"
+                        "声を 4 つの帯域に分けて音色を調整します。"
+                        "**ボーカルミックスの基本** で、不要な帯域を削ったり魅力的な帯域を強調することで「抜け」「太さ」「明るさ」を整えます。\n"
+                        "- 全部 0 dB なら何もしないので有効/無効スイッチは不要"
+                    )
+                    eq_low_shelf = gr.Slider(
+                        -6, 6, value=0, step=0.5,
+                        label="Low shelf @120Hz (dB)",
+                        info="低域の量感。+で太く重く / -で軽く前に。AI声に1-2dB足すと立体感が出やすい",
+                    )
+                    eq_low_mid = gr.Slider(
+                        -6, 6, value=0, step=0.5,
+                        label="Peak @400Hz (dB)",
+                        info="こもり帯域。-で抜けが良くなり / +でボディ感。普通は -1〜-2 で抜けを稼ぐ",
+                    )
+                    eq_high_mid = gr.Slider(
+                        -6, 6, value=0, step=0.5,
+                        label="Peak @1.5kHz (dB)",
+                        info="明瞭度・前傾度。+で前に出る / -でまろやか。1-2dB ブーストでクリアになる",
+                    )
+                    eq_high_shelf = gr.Slider(
+                        -6, 6, value=0, step=0.5,
+                        label="High shelf @8kHz (dB)",
+                        info="空気感・煌めき。+でエアリーに / -で落ち着いた音。プレゼンスとは別の高域",
+                    )
+
+                with gr.Accordion("詳細エフェクト: コンプレッサー", open=False):
+                    gr.Markdown(
+                        "### 機能説明: コンプレッサー\n"
+                        "**大きい音だけを潰して全体の音量バランスを均一化** するエフェクト。"
+                        "AI歌声は音量がフラットですが、それでも長尺曲ではダイナミクスがブレることがあります。"
+                        "コンプを軽く掛けると安定感が出て、リバーブの掛かりも自然になります。\n"
+                        "- 副作用としてサスティーンが伸びるので、息感も保ちたい時は弱めに(2:1 程度)"
+                    )
+                    comp_on = gr.Checkbox(
+                        label="コンプレッサーを使う",
+                        value=False,
+                        info="チェックして下のパラメータで動作開始",
+                    )
+                    comp_threshold = gr.Slider(
+                        -40, 0, value=-18, step=0.5,
+                        label="閾値 threshold (dB)",
+                        info="この音量を超えた部分が圧縮対象。-18dB はボーカル定番。低い(-25等)ほど深くかかる",
+                    )
+                    comp_ratio = gr.Slider(
+                        1, 10, value=3, step=0.5,
+                        label="比率 ratio",
+                        info="2:1=軽い / 3:1=自然なボーカル / 4-6:1=しっかり / 8:1+=リミッター寄り",
+                    )
+                    comp_attack = gr.Slider(
+                        0.1, 50, value=5, step=0.1,
+                        label="アタック attack (ms)",
+                        info="反応の速さ。短い(1-3ms)=パツッとした音 / 長い(10-30ms)=自然・アタック残す",
+                    )
+                    comp_release = gr.Slider(
+                        20, 500, value=80, step=10,
+                        label="リリース release (ms)",
+                        info="圧縮が抜ける速さ。短いとパンプ感、長いと滑らか。50-150ms がボーカル標準",
+                    )
+
+                with gr.Accordion("詳細エフェクト: ディエッサー", open=False):
+                    gr.Markdown(
+                        "### 機能説明: ディエッサー\n"
+                        "**「サ・シ・ス」音の刺さりを抑える** 専用処理。"
+                        "AI歌声は子音の制御が苦手で、サ行が突き刺さってヘッドホンで聴くと耳が痛いことがあります。\n\n"
+                        "**仕組み**: 6-8kHz 付近だけを取り出してその帯域だけにコンプを掛け、サ行のピークだけを抑える(クロスオーバー式)。"
+                        "コンプとは別物で、声の本体には影響しません。"
+                    )
+                    deess_on = gr.Checkbox(
+                        label="ディエッサーを使う",
+                        value=False,
+                        info="サ行が刺さる時だけ ON。問題ない素材なら OFF のまま",
+                    )
+                    deess_freq = gr.Slider(
+                        3000, 12000, value=6500, step=100,
+                        label="周波数 (Hz)",
+                        info="どの帯域のサ行を狙うか。日本語声で 5-8kHz、英語声で 6-9kHz 目安",
+                    )
+                    deess_threshold = gr.Slider(
+                        -40, 0, value=-25, step=0.5,
+                        label="閾値 (dB)",
+                        info="この帯域のエネルギーがこの値を超えたら抑制。低いほど積極的に掛かる",
+                    )
+                    deess_ratio = gr.Slider(
+                        1, 10, value=4, step=0.5,
+                        label="比率",
+                        info="4:1 が定番。8:1 まで上げるとほぼリミッターで刺さりを完全除去",
+                    )
+
+                with gr.Accordion("詳細エフェクト: コーラス・ダブラー", open=False):
+                    gr.Markdown(
+                        "### 機能説明: コーラス・ダブラー\n"
+                        "**声を「もう一人/数人で歌っている風」に厚くする** モジュレーション系エフェクト。\n\n"
+                        "- **ダブラー方向** (depth低・rate低・mix低): 同じ声がわずかにずれて重なる、自然な厚み\n"
+                        "- **コーラス方向** (depth高・rate高・mix高): 複数人の合唱風、80年代ポップスっぽい揺らぎ\n\n"
+                        "AI歌声に薄く掛けると「単声感」が減って人間っぽくなる効果も期待できます。"
+                    )
+                    chorus_on = gr.Checkbox(
+                        label="コーラス・ダブラーを使う",
+                        value=False,
+                    )
+                    chorus_rate = gr.Slider(
+                        0.1, 5, value=0.8, step=0.1,
+                        label="揺らぎ速度 rate (Hz)",
+                        info="0.3-0.7 = ダブラー風(ほぼ静止) / 1-2 = 軽いコーラス / 3+ = ロータリー寄り",
+                    )
+                    chorus_depth = gr.Slider(
+                        0, 1, value=0.25, step=0.05,
+                        label="揺らぎ深さ depth",
+                        info="0.1 = ほぼダブラー / 0.25 = 自然 / 0.5+ = 分厚いコーラス",
+                    )
+                    chorus_mix = gr.Slider(
+                        0, 1, value=0.3, step=0.05,
+                        label="ミックス量 mix",
+                        info="エフェクト音の混ぜ率。0.2 = 控えめ / 0.4 = 半々 / 0.6+ = エフェクト主体",
                     )
 
                 with gr.Accordion("iZotope RX 前処理 (オプション)", open=False):
@@ -360,25 +525,26 @@ def build_ui():
                     clear_log_btn = gr.Button("ログをクリア", size="sm")
 
         # --- Wiring ---
-
-        # All slider/input components for save/run (factored out for reuse)
+        # The component order here MUST match PARAM_FIELDS.
         all_param_inputs = [
             jitter_cents, vibrato_depth, vibrato_rate, shimmer,
             high_cut, presence_db, saturation, reverb_mix, reverb_room,
             skip_humanize, skip_effects,
             rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
+            eq_low_shelf, eq_low_mid, eq_high_mid, eq_high_shelf,
+            comp_on, comp_threshold, comp_ratio, comp_attack, comp_release,
+            deess_on, deess_freq, deess_threshold, deess_ratio,
+            chorus_on, chorus_rate, chorus_depth, chorus_mix,
         ]
-        slider_outputs = [
-            jitter_cents, vibrato_depth, vibrato_rate, shimmer,
-            high_cut, presence_db, saturation, reverb_mix, reverb_room,
-            skip_humanize, skip_effects,
-            rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens,
-        ]
+        assert len(all_param_inputs) == len(PARAM_FIELDS), (
+            f"UI/schema mismatch: {len(all_param_inputs)} inputs vs "
+            f"{len(PARAM_FIELDS)} fields"
+        )
 
         preset.change(
             load_preset_values,
             inputs=[preset],
-            outputs=slider_outputs,
+            outputs=all_param_inputs,
         )
 
         save_btn.click(
@@ -396,7 +562,7 @@ def build_ui():
         clear_log_btn.click(clear_log, outputs=[op_log_box])
 
         run_btn.click(
-            run,
+            run_wrapper,
             inputs=[
                 audio_in, preset, *all_param_inputs,
                 rvc_model_path, rvc_index_path, rvc_pitch,
