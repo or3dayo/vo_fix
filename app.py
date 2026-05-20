@@ -19,6 +19,7 @@ from vo_fix.humanize import HumanizeConfig
 from vo_fix.io import load_wav
 from vo_fix.operation_log import OperationLog
 from vo_fix.pipeline import PRESETS, ProcessConfig, RXConfig, process_array
+from vo_fix.theme import CUSTOM_CSS, build_theme
 from vo_fix.user_presets import (
     all_preset_names,
     delete_user_preset,
@@ -264,9 +265,11 @@ def clear_log():
 
 def build_ui():
     with gr.Blocks(title="vo_fix — AI歌声ナチュラライザー") as demo:
-        gr.Markdown(
-            "# vo_fix — AI歌声ナチュラライザー\n"
-            "SUNO等のAI歌声に揺らぎとミックス処理を足して人間っぽくします。"
+        gr.HTML(
+            '<div class="vo-fix-brand">'
+            "<h1>vo_fix — AI歌声ナチュラライザー</h1>"
+            "<p>SUNO等のAI歌声に揺らぎとミックス処理を足して人間っぽくします。</p>"
+            "</div>"
         )
 
         with gr.Row():
@@ -681,4 +684,4 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    build_ui().launch()
+    build_ui().launch(theme=build_theme(), css=CUSTOM_CSS)

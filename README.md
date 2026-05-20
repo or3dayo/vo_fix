@@ -18,6 +18,7 @@ SUNO等のAI歌声を人間っぽくする後処理ツール。
 - **CLI と Gradio UI** 両対応
 - 4 プリセット: `off` / `natural` / `intimate` / `polished` + ユーザーカスタム保存
 - 操作ログ(変換ごとの差分を記録)
+- **Spotify風ダークUI**(緑アクセント + ピル型ボタン + Inter フォント)
 
 ## おすすめワークフロー
 
@@ -369,12 +370,16 @@ Gradio UI からは「iZotope RX 前処理」アコーディオンを開いて�
 
 ```
 vo_fix/
-├── humanize.py      # pyworld f0 jitter + amp shimmer
-├── effects.py       # pedalboard EQ/saturation/reverb
-├── vst.py           # iZotope RX VST3 ローダー
-├── pipeline.py      # オーケストレーション + プリセット
-├── io.py            # wav 読み書き
-├── rvc.py           # スタブ (Applio 連携を推奨)
+├── humanize.py        # pyworld f0 jitter + amp shimmer + formant + gender
+├── vocal_processing.py# 子音強調・抑制 + 自動ブレス挿入
+├── effects.py         # 4バンドEQ + コンプ + ディエッサー + コーラス + EQ/saturation/reverb
+├── vst.py             # iZotope RX VST3 ローダー (OS自動判別)
+├── pipeline.py        # オーケストレーション + プリセット
+├── user_presets.py    # マイプリセット保存/読み込み
+├── operation_log.py   # 操作ログ
+├── theme.py           # Spotify風 Gradio テーマ
+├── io.py              # wav 読み書き
+├── rvc.py             # スタブ (Applio 連携を推奨)
 └── __init__.py
 cli.py               # click ベースの CLI
 app.py               # Gradio UI
