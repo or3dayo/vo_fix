@@ -82,6 +82,7 @@ from vo_fix.vocal_processing import VocalProcessingConfig
 @click.option("--vocal-gain", type=float, default=0.0, help="Gain (dB) applied to the processed vocal in the final mix")
 @click.option("--stems-gain", type=float, default=0.0, help="Gain (dB) applied to all stems in the final mix")
 @click.option("--master-gain", type=float, default=0.0, help="Master gain (dB) on the post-sum mix")
+@click.option("--export-vocal", is_flag=True, help="When --stem is used, also write a vocal-only file at <output>_vocal.<ext>")
 def main(
     input_path: str,
     output_path: str,
@@ -136,6 +137,7 @@ def main(
     vocal_gain: float,
     stems_gain: float,
     master_gain: float,
+    export_vocal: bool,
 ) -> None:
     cfg = get_preset(preset)
     # Patch overrides
@@ -252,9 +254,13 @@ def main(
         cfg.mix.stems_gain_db = stems_gain
         cfg.mix.master_gain_db = master_gain
 
+    cfg.export_vocal_separately = export_vocal
+
     click.echo(f"Processing {input_path} -> {output_path} (preset={preset})")
-    out = process(input_path, output_path, cfg)
-    click.echo(f"Wrote {out}")
+    main_path, vocal_path = process(input_path, output_path, cfg)
+    click.echo(f"Wrote {main_path}")
+    if vocal_path:
+        click.echo(f"Wrote {vocal_path}  (vocal-only)")
 
 
 if __name__ == "__main__":

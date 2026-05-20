@@ -59,6 +59,12 @@ class ProcessConfig:
     skip_humanize: bool = False
     skip_effects: bool = False
 
+    export_vocal_separately: bool = False
+    """When True AND stems are mixed in, also write the pre-mix processed
+    vocal as a separate file at ``<output>_vocal.<ext>``. Useful for
+    keeping the vocal-only stem for later DAW work.
+    """
+
     force_mono: bool = False
     """If True, stereo input is averaged to mono on load and output is
     mono. Default False = each channel is processed independently and
@@ -244,9 +250,31 @@ def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[
     return stacked.astype(np.float32), out_sr
 
 
+def _vocal_only_path(output_path: str | Path) -> Path:
+    """Derive the side-car vocal-only path from the main output path.
+
+    `out/song.wav` -> `out/song_vocal.wav`
+    """
+    p = Path(output_path)
+    return p.with_name(f"{p.stem}_vocal{p.suffix}")
+
+
 def process(
-    input_path: str | Path, output_path: str | Path, config: ProcessConfig | None = None
-) -> Path:
+    input_path: str | Path,
+    output_path: str | Path,
+    config: ProcessConfig | None = None,
+    vocal_only_path: str | Path | None = None,
+) -> tuple[Path, Path | None]:
+    """Run the full pipeline and write the result(s).
+
+    Returns ``(main_path, vocal_only_path_actual)``.
+
+    - ``main_path`` is always the final output (with stems mixed in if any).
+    - ``vocal_only_path_actual`` is set when stems were applied AND either:
+        * ``vocal_only_path`` was passed explicitly, OR
+        * ``config.export_vocal_separately`` is True (path auto-derived).
+      Otherwise it is None.
+    """
     cfg = config or get_preset("natural")
     samples, sr, meta = load_wav(
         input_path,
@@ -254,6 +282,24 @@ def process(
         force_mono=cfg.force_mono,
     )
     out, out_sr = process_array(samples, sr, cfg)
+
+    # Decide whether to also dump the pre-mix vocal as a separate file.
+    want_vocal_only = (
+        cfg.mix.enabled
+        and cfg.mix.stem_paths
+        and (vocal_only_path is not None or cfg.export_vocal_separately)
+    )
+    actual_vocal_path: Path | None = None
+    if want_vocal_only:
+        target = Path(vocal_only_path) if vocal_only_path else _vocal_only_path(output_path)
+        save_wav(
+            target,
+            out,
+            out_sr,
+            subtype=cfg.output_subtype,
+            input_subtype=meta.subtype,
+        )
+        actual_vocal_path = target
 
     # Final stage: mix in any instrumentals / STEMs the user supplied.
     out = mix_with_stems(out, out_sr, cfg.mix)
@@ -265,4 +311,4 @@ def process(
         subtype=cfg.output_subtype,
         input_subtype=meta.subtype,
     )
-    return Path(output_path)
+    return Path(output_path), actual_vocal_path

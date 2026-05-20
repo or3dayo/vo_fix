@@ -230,12 +230,13 @@ def run(
     vocal_gain=0.0,
     stems_gain=0.0,
     master_gain=0.0,
+    export_vocal=False,
 ):
     if audio_path is None:
-        return None, "音声ファイルをアップロードしてください", OP_LOG.as_text()
+        return None, None, "音声ファイルをアップロードしてください", OP_LOG.as_text()
 
     if len(param_values) < len(PARAM_FIELDS):
-        return None, f"内部エラー: パラメータ数 {len(param_values)} (期待 {len(PARAM_FIELDS)})", OP_LOG.as_text()
+        return None, None, f"内部エラー: パラメータ数 {len(param_values)} (期待 {len(PARAM_FIELDS)})", OP_LOG.as_text()
 
     params = dict(zip(PARAM_FIELDS, param_values))
     base, cfg = _params_to_config(preset, params)
@@ -258,46 +259,68 @@ def run(
         samples, sr, meta = load_wav(
             audio_path, target_sr=cfg.target_sr, force_mono=cfg.force_mono
         )
-        out, out_sr = process_array(samples, sr, cfg)
-        # Final stage: mix in stems if any were provided
-        out = mix_with_stems(out, out_sr, cfg.mix)
-        out_path = Path(tempfile.mkdtemp()) / "vo_fix_out.wav"
-        used_subtype = save_wav(
-            out_path,
-            out,
-            out_sr,
-            subtype=cfg.output_subtype,
-            input_subtype=meta.subtype,
-        )
+        vocal_only_arr, out_sr = process_array(samples, sr, cfg)
+
+        tmpdir = Path(tempfile.mkdtemp())
+        vocal_only_path: str | None = None
+
+        # Stem mix
+        if cfg.mix.enabled and cfg.mix.stem_paths:
+            mixed = mix_with_stems(vocal_only_arr, out_sr, cfg.mix)
+            main_path = tmpdir / "vo_fix_mix.wav"
+            used_subtype = save_wav(
+                main_path, mixed, out_sr,
+                subtype=cfg.output_subtype, input_subtype=meta.subtype,
+            )
+            if export_vocal:
+                vp = tmpdir / "vo_fix_vocal_only.wav"
+                save_wav(
+                    vp, vocal_only_arr, out_sr,
+                    subtype=cfg.output_subtype, input_subtype=meta.subtype,
+                )
+                vocal_only_path = str(vp)
+            primary_arr = mixed
+        else:
+            main_path = tmpdir / "vo_fix_out.wav"
+            used_subtype = save_wav(
+                main_path, vocal_only_arr, out_sr,
+                subtype=cfg.output_subtype, input_subtype=meta.subtype,
+            )
+            primary_arr = vocal_only_arr
+
         elapsed = time.perf_counter() - t0
         OP_LOG.record_run(
             preset_name=preset,
             preset_config=base,
             actual_config=cfg,
             input_path=audio_path,
-            output_path=str(out_path),
+            output_path=str(main_path),
             duration_seconds=elapsed,
         )
         status_msg = (
-            f"完了 — {len(out)/out_sr:.2f}s @ {out_sr}Hz / {used_subtype}"
+            f"完了 — {len(primary_arr)/out_sr:.2f}s @ {out_sr}Hz / {used_subtype}"
             f"  (入力: {meta.sample_rate}Hz / {meta.subtype}, 処理 {elapsed:.2f}s)"
         )
-        return str(out_path), status_msg, OP_LOG.as_text()
+        if vocal_only_path:
+            status_msg += "  + ボーカル単体も書き出し"
+        return str(main_path), vocal_only_path, status_msg, OP_LOG.as_text()
     except Exception as e:
-        return None, f"エラー: {e}", OP_LOG.as_text()
+        return None, None, f"エラー: {e}", OP_LOG.as_text()
 
 
 def run_wrapper(*args):
     """Gradio passes positional args. Order:
     audio_path, preset, *PARAM_FIELDS, rvc_model, rvc_index, rvc_pitch,
-    stem_files, vocal_gain, stems_gain, master_gain
+    stem_files, vocal_gain, stems_gain, master_gain, export_vocal
     """
     audio_path, preset = args[0], args[1]
     n_params = len(PARAM_FIELDS)
     param_values = args[2 : 2 + n_params]
     rest = args[2 + n_params :]
     rvc_model, rvc_index, rvc_pitch = rest[0], rest[1], rest[2]
-    stem_files, vocal_gain, stems_gain, master_gain = rest[3], rest[4], rest[5], rest[6]
+    stem_files, vocal_gain, stems_gain, master_gain, export_vocal = (
+        rest[3], rest[4], rest[5], rest[6], rest[7]
+    )
     return run(
         audio_path, preset, *param_values,
         rvc_model_path=rvc_model,
@@ -307,6 +330,7 @@ def run_wrapper(*args):
         vocal_gain=vocal_gain,
         stems_gain=stems_gain,
         master_gain=master_gain,
+        export_vocal=bool(export_vocal),
     )
 
 
@@ -800,6 +824,14 @@ def build_ui():
                         label="マスター ゲイン (dB)",
                         info="最終出力の音量。クリップしそうなら -1 〜 -3dB",
                     )
+                    export_vocal_chk = gr.Checkbox(
+                        label="ボーカル単体も別ファイルで書き出す",
+                        value=False,
+                        info=(
+                            "ON で「完成ミックス」と「ボーカル単体(加工済み・ステム合成前)」"
+                            "を2ファイル同時出力。DAW で再ミックスしたい時に便利"
+                        ),
+                    )
 
                 with gr.Accordion("RVC 声質変換 (オプション)", open=False):
                     gr.Markdown(
@@ -812,7 +844,11 @@ def build_ui():
                 run_btn = gr.Button("変換", variant="primary")
 
             with gr.Column():
-                audio_out = gr.Audio(label="出力", type="filepath")
+                audio_out = gr.Audio(label="出力(完成ミックス)", type="filepath")
+                audio_out_vocal = gr.Audio(
+                    label="出力(ボーカル単体)",
+                    type="filepath",
+                )
                 status = gr.Textbox(label="ステータス", interactive=False)
 
                 with gr.Accordion("操作ログ (履歴)", open=True):
@@ -886,8 +922,9 @@ def build_ui():
                 audio_in, preset, *all_param_inputs,
                 rvc_model_path, rvc_index_path, rvc_pitch,
                 stem_files, vocal_gain, stems_gain, master_gain,
+                export_vocal_chk,
             ],
-            outputs=[audio_out, status, op_log_box],
+            outputs=[audio_out, audio_out_vocal, status, op_log_box],
         )
 
     return demo

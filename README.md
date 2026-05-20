@@ -502,6 +502,21 @@ Applio (https://applio.org/) はこれらを全部解決済みのワンクリッ
   --master-gain -1
 ```
 
+### ボーカル単体も同時書き出し
+
+ステムを使うと完成ミックスが出ますが、**「DAW で再ミックスしたいから加工済みボーカル単体も欲しい」** という需要もあるはず。`--export-vocal` フラグ(CLI)または UI のチェックボックスで、**完成ミックスとボーカル単体を 2 ファイル同時出力** できます。
+
+```powershell
+# CLI 例
+.\.venv\Scripts\python.exe cli.py `
+  -i vocal.wav -o song.wav `
+  --preset natural --stem instrumental.wav `
+  --export-vocal
+# -> song.wav (完成ミックス) + song_vocal.wav (ボーカル単体) の2ファイル生成
+```
+
+Gradio UI でも「ステム合成」アコーディオン内のチェックボックスを ON にすれば、右ペインに「完成ミックス」と「ボーカル単体」の2つの再生プレーヤーが表示されます。
+
 ### 動作仕様
 
 | | 内容 |
@@ -511,6 +526,7 @@ Applio (https://applio.org/) はこれらを全部解決済みのワンクリッ
 | チャンネル | mono ボーカル × stereo ステム等もすべて自動対応 |
 | 長さ | 最も長いトラックに合わせる(イントロ/アウトロのインストが残る)、足りない箇所は無音パディング |
 | クリップ防止 | peak > 0.99 で自動正規化 |
+| ボーカル単体出力 | `--export-vocal` で `<output>_vocal.<ext>` も同時生成 |
 
 ## 出力品質(サンプルレート / ビット深度 / チャンネル)
 
