@@ -12,6 +12,7 @@ import click
 from vo_fix.effects import EffectsConfig
 from vo_fix.humanize import HumanizeConfig
 from vo_fix.pipeline import PRESETS, ProcessConfig, get_preset, process
+from vo_fix.vocal_processing import VocalProcessingConfig
 
 
 @click.command()
@@ -57,6 +58,17 @@ from vo_fix.pipeline import PRESETS, ProcessConfig, get_preset, process
 @click.option("--chorus-rate", type=float, default=None, help="Chorus rate (Hz, default 0.8)")
 @click.option("--chorus-depth", type=float, default=None, help="Chorus depth 0-1 (default 0.25)")
 @click.option("--chorus-mix", type=float, default=None, help="Chorus mix 0-1 (default 0.3)")
+# --- Formant + gender ---
+@click.option("--formant-shift", type=float, default=None, help="Formant ratio: 1.0=neutral, 0.85=chesty, 1.18=bright")
+@click.option("--gender-shift", type=float, default=None, help="Combined pitch+formant gender slider, -1.0 (male) to +1.0 (female)")
+# --- Consonant ---
+@click.option("--consonant", type=float, default=None, help="Consonant emphasis amount: -1..+1 (negative = soften, positive = sharpen)")
+@click.option("--consonant-sens", type=float, default=None, help="Consonant transient sensitivity (default 0.5)")
+# --- Breath ---
+@click.option("--breath", is_flag=True, help="Insert synthetic breath sounds in silent gaps")
+@click.option("--breath-threshold", type=float, default=None, help="Silence threshold dB (default -40)")
+@click.option("--breath-min-silence", type=float, default=None, help="Min silence to fill, seconds (default 0.4)")
+@click.option("--breath-intensity", type=float, default=None, help="Breath peak level (default 0.05)")
 @click.option("--rvc-model", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--rvc-index", type=click.Path(exists=True, dir_okay=False), default=None)
 @click.option("--rvc-pitch", type=float, default=0.0, help="RVC pitch shift in semitones")
@@ -97,6 +109,14 @@ def main(
     chorus_rate: float | None,
     chorus_depth: float | None,
     chorus_mix: float | None,
+    formant_shift: float | None,
+    gender_shift: float | None,
+    consonant: float | None,
+    consonant_sens: float | None,
+    breath: bool,
+    breath_threshold: float | None,
+    breath_min_silence: float | None,
+    breath_intensity: float | None,
     rvc_model: str | None,
     rvc_index: str | None,
     rvc_pitch: float,
@@ -180,6 +200,27 @@ def main(
         e.chorus_depth = chorus_depth
     if chorus_mix is not None:
         e.chorus_mix = chorus_mix
+
+    # Formant + gender (humanize side)
+    if formant_shift is not None:
+        h.formant_shift_ratio = formant_shift
+    if gender_shift is not None:
+        h.gender_shift = gender_shift
+
+    # Consonant + breath (vocal_processing side)
+    v = cfg.vocal
+    if consonant is not None:
+        v.consonant_amount = consonant
+    if consonant_sens is not None:
+        v.consonant_sensitivity = consonant_sens
+    if breath or any(x is not None for x in (breath_threshold, breath_min_silence, breath_intensity)):
+        v.breath_enabled = True
+    if breath_threshold is not None:
+        v.breath_threshold_db = breath_threshold
+    if breath_min_silence is not None:
+        v.breath_min_silence_s = breath_min_silence
+    if breath_intensity is not None:
+        v.breath_intensity = breath_intensity
 
     if rvc_model:
         cfg.rvc_model_path = rvc_model

@@ -38,7 +38,21 @@ class HumanizeConfig:
     shimmer_rate_hz: float = 7.0
 
     formant_jitter: float = 0.0
-    """Mild formant variation. 0.0–0.05 sensible. Costly — off by default."""
+    """Mild formant variation. 0.0-0.05 sensible. Costly - off by default."""
+
+    formant_shift_ratio: float = 1.0
+    """Static formant shift. 1.0 = no change.
+    <1.0 = formants down (chestier, more masculine timbre).
+    >1.0 = formants up (brighter, more feminine timbre).
+    Useful range 0.85-1.18.
+    """
+
+    gender_shift: float = 0.0
+    """Combined pitch + formant gender slider, -1.0 (deep male) to +1.0
+    (high female). 0 = no change. Internally drives both pitch (up to
+    +/-3 semitones) and formants (0.82-1.18). Multiplies with the
+    explicit formant_shift_ratio if both are set.
+    """
 
     seed: int | None = None
 
@@ -92,11 +106,56 @@ def apply_shimmer(
     return (samples * gain).astype(np.float32)
 
 
+def _shift_formants(sp: np.ndarray, ratio: float) -> np.ndarray:
+    """Warp the spectral envelope along the frequency axis.
+
+    Shape: (n_frames, n_freq). ratio > 1 shifts formants up (brighter),
+    ratio < 1 shifts them down (deeper). We do this by sampling sp at
+    new positions: new[k] = sp[k / ratio], with linear interpolation.
+    """
+    if abs(ratio - 1.0) < 1e-3:
+        return sp
+    n_freq = sp.shape[1]
+    src_idx = np.arange(n_freq) / ratio
+    src_idx = np.clip(src_idx, 0.0, n_freq - 1.0)
+    floor_idx = np.floor(src_idx).astype(np.int64)
+    ceil_idx = np.minimum(floor_idx + 1, n_freq - 1)
+    frac = (src_idx - floor_idx).astype(sp.dtype)
+    # Linear interp along freq axis (vectorized over frames). pyworld
+    # requires C-contiguous arrays for synthesize() so ascontiguousarray()
+    # the result here rather than at the call site.
+    new_sp = (1.0 - frac) * sp[:, floor_idx] + frac * sp[:, ceil_idx]
+    return np.ascontiguousarray(new_sp)
+
+
+def _resolve_gender_shift(gender: float) -> tuple[float, float]:
+    """Map gender slider [-1, +1] to (pitch_semitones, formant_ratio)."""
+    g = float(np.clip(gender, -1.0, 1.0))
+    pitch_semitones = g * 3.0           # +/-3 semitones at extremes
+    formant_ratio = 1.0 + g * 0.18      # 0.82..1.18 at extremes
+    return pitch_semitones, formant_ratio
+
+
 def apply_pitch_humanize(
     samples: np.ndarray, sr: int, config: HumanizeConfig, rng: np.random.Generator
 ) -> np.ndarray:
-    """Use pyworld to decompose, modify f0, resynth."""
-    if config.jitter_cents <= 0 and config.vibrato_depth_cents <= 0:
+    """Use pyworld to decompose, modify f0/spectral envelope, resynth.
+
+    We do a single pyworld pass that handles jitter, vibrato, formant
+    shift, gender shift, and any explicit pitch shift coming from gender.
+    Combining everything here avoids round-tripping audio through
+    pyworld more than once.
+    """
+    gender_pitch_st, gender_formant = _resolve_gender_shift(config.gender_shift)
+    effective_formant = config.formant_shift_ratio * gender_formant
+
+    needs_pyworld = (
+        config.jitter_cents > 0
+        or config.vibrato_depth_cents > 0
+        or abs(effective_formant - 1.0) > 1e-3
+        or abs(gender_pitch_st) > 1e-3
+    )
+    if not needs_pyworld:
         return samples
 
     try:
@@ -107,7 +166,7 @@ def apply_pitch_humanize(
         ) from e
 
     x = samples.astype(np.float64)
-    frame_period = 5.0  # ms — pyworld default
+    frame_period = 5.0  # ms - pyworld default
 
     # 1. Decompose
     f0, t = pw.harvest(x, sr, frame_period=frame_period)
@@ -121,23 +180,28 @@ def apply_pitch_humanize(
     f0_mod = f0.copy()
     voiced = f0_mod > 0
 
+    if abs(gender_pitch_st) > 1e-3:
+        # Static pitch shift from gender control
+        f0_mod[voiced] *= 2.0 ** (gender_pitch_st / 12.0)
+
     if config.jitter_cents > 0:
         drift = _smooth_noise_fast(n_frames, config.jitter_rate_hz, int(frame_sr), rng)
-        # cents -> ratio: 2^(cents/1200)
         ratio = 2.0 ** ((config.jitter_cents * drift) / 1200.0)
         f0_mod[voiced] *= ratio[voiced]
 
     if config.vibrato_depth_cents > 0:
         t_axis = np.arange(n_frames) / frame_sr
-        # Vibrato rate also drifts a bit so it doesn't sound mechanical
         rate_drift = 1.0 + 0.1 * _smooth_noise_fast(n_frames, 0.7, int(frame_sr), rng)
         phase = 2 * np.pi * config.vibrato_rate_hz * t_axis * rate_drift
         vib = np.sin(phase)
         ratio = 2.0 ** ((config.vibrato_depth_cents * vib) / 1200.0)
         f0_mod[voiced] *= ratio[voiced]
 
-    # 3. Resynth
-    y = pw.synthesize(f0_mod, sp, ap, sr, frame_period=frame_period)
+    # 3. Modify spectral envelope (formant shift)
+    sp_mod = _shift_formants(sp, effective_formant)
+
+    # 4. Resynth
+    y = pw.synthesize(f0_mod, sp_mod, ap, sr, frame_period=frame_period)
     return y.astype(np.float32)
 
 

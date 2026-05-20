@@ -26,6 +26,7 @@ from vo_fix.user_presets import (
     resolve_preset,
     save_user_preset,
 )
+from vo_fix.vocal_processing import VocalProcessingConfig
 from vo_fix.vst import DEFAULT_RX_DIR, DEFAULT_RX_DIRS, find_rx_plugins
 
 # Single shared log for the running app instance. Gradio is single-process
@@ -53,6 +54,12 @@ PARAM_FIELDS = [
     "deess_on", "deess_freq", "deess_threshold", "deess_ratio",
     # chorus
     "chorus_on", "chorus_rate", "chorus_depth", "chorus_mix",
+    # vocal: formant + gender
+    "formant_shift", "gender_shift",
+    # vocal: consonant
+    "consonant_amount", "consonant_sens",
+    # vocal: breath
+    "breath_on", "breath_threshold", "breath_min_silence", "breath_intensity",
 ]
 
 
@@ -67,6 +74,16 @@ def _params_to_config(preset_name: str, params: dict) -> tuple[ProcessConfig, Pr
             shimmer=float(params["shimmer"]),
             jitter_rate_hz=base.humanize.jitter_rate_hz,
             shimmer_rate_hz=base.humanize.shimmer_rate_hz,
+            formant_shift_ratio=float(params["formant_shift"]),
+            gender_shift=float(params["gender_shift"]),
+        ),
+        vocal=VocalProcessingConfig(
+            consonant_amount=float(params["consonant_amount"]),
+            consonant_sensitivity=float(params["consonant_sens"]),
+            breath_enabled=bool(params["breath_on"]),
+            breath_threshold_db=float(params["breath_threshold"]),
+            breath_min_silence_s=float(params["breath_min_silence"]),
+            breath_intensity=float(params["breath_intensity"]),
         ),
         effects=EffectsConfig(
             high_cut_hz=float(params["high_cut"]),
@@ -150,6 +167,14 @@ def _config_to_param_values(p: ProcessConfig) -> list:
         p.effects.chorus_rate_hz,
         p.effects.chorus_depth,
         p.effects.chorus_mix,
+        p.humanize.formant_shift_ratio,
+        p.humanize.gender_shift,
+        p.vocal.consonant_amount,
+        p.vocal.consonant_sensitivity,
+        p.vocal.breath_enabled,
+        p.vocal.breath_threshold_db,
+        p.vocal.breath_min_silence_s,
+        p.vocal.breath_intensity,
     ]
 
 
@@ -428,6 +453,85 @@ def build_ui():
                         info="4:1 が定番。8:1 まで上げるとほぼリミッターで刺さりを完全除去",
                     )
 
+                with gr.Accordion("音処理: フォルマント微変調", open=False):
+                    gr.Markdown(
+                        "### 機能説明: フォルマント微変調\n"
+                        "**声の質感そのもの** を微調整します。フォルマントは声道の共鳴ピークで、声の「太さ・細さ・明るさ」を決める正体です。\n\n"
+                        "- ピッチは変えずにフォルマントだけ動かすので、**メロディはそのままで声色だけ変わる**\n"
+                        "- 1.0 = 無変更 / <1.0 = チェスティで太い男声寄り / >1.0 = ブライトで女声寄り\n"
+                        "- 0.95-1.05 の微変調が「不自然にならず印象を変える」スイートスポット"
+                    )
+                    formant_shift = gr.Slider(
+                        0.80, 1.20, value=1.0, step=0.01,
+                        label="フォルマント比 (1.0=neutral)",
+                        info="0.85 = 重厚な男声化 / 0.95 = 少し低めに / 1.05 = 少し高めに / 1.15 = 明るく女声化",
+                    )
+
+                with gr.Accordion("音処理: 男声 ⇔ 女声 補正", open=False):
+                    gr.Markdown(
+                        "### 機能説明: 男声 ⇔ 女声 補正\n"
+                        "**ピッチとフォルマントを同時に動かす** ジェンダー方向の補正スライダー。"
+                        "ピッチだけ上げると「ヘリウム声」、フォルマントだけ上げると「ミッキー声」になりますが、両方適切に動かすと自然な性別変換になります。\n\n"
+                        "- 0 = 無変更\n"
+                        "- 負方向: ピッチ↓ + フォルマント↓ = 男声化\n"
+                        "- 正方向: ピッチ↑ + フォルマント↑ = 女声化\n"
+                        "- フォルマント微変調 と同時指定で乗算合成されます"
+                    )
+                    gender_shift = gr.Slider(
+                        -1.0, 1.0, value=0.0, step=0.05,
+                        label="性別シフト",
+                        info="-1.0 = 深い男声(-3半音+formant 0.82) / 0 = 元のまま / +1.0 = 高い女声(+3半音+formant 1.18)",
+                    )
+
+                with gr.Accordion("音処理: 子音強調 / 抑制", open=False):
+                    gr.Markdown(
+                        "### 機能説明: 子音強調・抑制\n"
+                        "**「歯切れ」を調整する** トランジェント処理。子音のアタック部分だけを検出してゲインを変えます。\n\n"
+                        "- **+方向(強調)**: 滑舌が良くなる、前に出る、ラップやポップス向き\n"
+                        "- **-方向(抑制)**: 柔らかく、ささやき声っぽく、バラード・ASMR 向き\n"
+                        "- 仕組み: librosa の onset 検出 + ゲインエンベロープ。声の本体には影響しない"
+                    )
+                    consonant_amount = gr.Slider(
+                        -1.0, 1.0, value=0.0, step=0.05,
+                        label="子音調整量",
+                        info="-1 = 大きく抑制 / -0.3 = 柔らかく / 0 = 無変更 / +0.3 = 歯切れ良く / +1 = 強調",
+                    )
+                    consonant_sens = gr.Slider(
+                        0.1, 1.5, value=0.5, step=0.05,
+                        label="検出感度",
+                        info="高いほど強いトランジェントだけ反応。0.3=ゆるく全体的、1.0=ピークのみ",
+                    )
+
+                with gr.Accordion("音処理: 自動ブレス挿入", open=False):
+                    gr.Markdown(
+                        "### 機能説明: 自動ブレス挿入\n"
+                        "**長い無音区間に合成ブレス(息継ぎ音)を差し込む** 機能です。"
+                        "AI歌声の最大の不自然さの一つは「息継ぎが無いこと」。"
+                        "音楽的なフレーズの隙間にブレスを足すと一気に人間味が出ます。\n\n"
+                        "- 仕組み: RMS で無音区間を検出 → 帯域制限ノイズ + ASR エンベロープでブレス合成 → 隙間中央にクロスフェード挿入\n"
+                        "- **音楽が止まっている区間が無い場合は何も起きません**(意図的なフレーズ間にだけ入る)"
+                    )
+                    breath_on = gr.Checkbox(
+                        label="ブレス挿入を有効化",
+                        value=False,
+                        info="チェックするとフレーズの隙間に息継ぎが差し込まれる",
+                    )
+                    breath_threshold = gr.Slider(
+                        -60, -20, value=-40, step=1,
+                        label="無音判定 (dB)",
+                        info="この値より静かな区間を無音と判定。-40=普通 / -50=厳しめ / -30=ゆるく",
+                    )
+                    breath_min_silence = gr.Slider(
+                        0.2, 2.0, value=0.4, step=0.1,
+                        label="最小無音長 (秒)",
+                        info="この長さ以上の無音だけにブレスを入れる。短い隙間は無視",
+                    )
+                    breath_intensity = gr.Slider(
+                        0.0, 0.2, value=0.05, step=0.005,
+                        label="ブレス音量",
+                        info="0.03 = ささやかな息 / 0.05 = 自然 / 0.1+ = はっきり聞こえる",
+                    )
+
                 with gr.Accordion("詳細エフェクト: コーラス・ダブラー", open=False):
                     gr.Markdown(
                         "### 機能説明: コーラス・ダブラー\n"
@@ -535,6 +639,9 @@ def build_ui():
             comp_on, comp_threshold, comp_ratio, comp_attack, comp_release,
             deess_on, deess_freq, deess_threshold, deess_ratio,
             chorus_on, chorus_rate, chorus_depth, chorus_mix,
+            formant_shift, gender_shift,
+            consonant_amount, consonant_sens,
+            breath_on, breath_threshold, breath_min_silence, breath_intensity,
         ]
         assert len(all_param_inputs) == len(PARAM_FIELDS), (
             f"UI/schema mismatch: {len(all_param_inputs)} inputs vs "

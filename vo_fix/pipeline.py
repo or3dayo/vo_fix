@@ -11,6 +11,7 @@ import numpy as np
 from .effects import EffectsConfig, apply_effects
 from .humanize import HumanizeConfig, humanize
 from .io import load_wav, save_wav
+from .vocal_processing import VocalProcessingConfig, apply as apply_vocal_processing
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class RXConfig:
 class ProcessConfig:
     humanize: HumanizeConfig = field(default_factory=HumanizeConfig)
     effects: EffectsConfig = field(default_factory=EffectsConfig)
+    vocal: VocalProcessingConfig = field(default_factory=VocalProcessingConfig)
     rx: RXConfig = field(default_factory=RXConfig)
     rvc_model_path: str | None = None
     rvc_index_path: str | None = None
@@ -156,6 +158,11 @@ def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[
 
     if not config.skip_humanize:
         out = humanize(out, cur_sr, config.humanize)
+
+    # Sample-domain vocal processing (consonant shaping + breath insertion)
+    # sits between humanize and the effects chain so the inserted breaths
+    # get the same EQ / reverb treatment as the voice.
+    out = apply_vocal_processing(out, cur_sr, config.vocal)
 
     if not config.skip_effects:
         out = apply_effects(out, cur_sr, config.effects)
