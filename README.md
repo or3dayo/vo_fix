@@ -31,11 +31,72 @@ vo_fix (揺らぎ + ミックス処理)
 
 ## セットアップ
 
-**Python 3.11 が必要** (依存ライブラリの wheel 都合)。
+### 必要なもの
+
+- **Python 3.11** (依存ライブラリの wheel 都合。3.12+ では pyworld 等の wheel が無くビルド失敗)
+- **Git** (clone するため。無ければ `winget install --id Git.Git` か https://git-scm.com/download/win から)
+- **Windows** (RX VST 統合は Windows パス前提。macOS/Linux でも本体は動くが RX 部分は要パス変更)
+
+### 1. ダウンロード(git clone)
+
+```powershell
+cd C:\dev               # 配置先(下記「配置先の推奨」参照)
+git clone https://github.com/or3dayo/vo_fix.git
+cd vo_fix
+```
+
+> ZIP DL (Code → Download ZIP) でもOKですが、後から `git pull` で更新できなくなるので **git clone を強く推奨** します。
+
+### 2. Python 3.11 を準備
+
+Python 3.13+ が入っていれば py launcher 経由で 3.11 を追加できます:
+
+```powershell
+py install 3.11
+py -3.11 --version    # 3.11.x が出ればOK
+```
+
+3.13 以前を使っている場合は https://www.python.org/downloads/release/python-3119/ から手動 DL。インストール時 **Add to PATH** にチェック。
+
+### 3. venv 作成と依存インストール
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+PowerShell の実行ポリシーで Activate.ps1 が弾かれる場合:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+(これは一度だけでOK。以後の Python セッションすべてに効きます)
+
+### 配置先の推奨
+
+| 場所 | おすすめ度 | 理由 |
+|---|---|---|
+| `C:\dev\vo_fix\` | ◎ 第一選択 | 短い・スペースなし・OneDriveの外。安牌 |
+| `C:\repos\vo_fix\`, `D:\dev\vo_fix\` | ◎ 同等 | 好みで |
+| `C:\Users\<name>\Documents\...` | ⚠️ 注意 | 多くの日本語Windowsで OneDrive 同期対象。`.venv` (数百MB) も同期されて遅くなる |
+| `C:\Users\<name>\OneDrive\...` | ❌ 避ける | 同上、`pip install` 中にファイルロック衝突で失敗することも |
+| `C:\Program Files\...` | ❌ 避ける | UAC で `pip install` が弾かれる |
+| パスに日本語/スペース | ⚠️ 注意 | 通常動くが一部C拡張で稀にエラー |
+
+### 更新の取り込み(後日)
+
+vo_fix が更新されたら **再DL不要**、`git pull` で最新化:
 
 ```powershell
 cd C:\dev\vo_fix
-py -3.11 -m venv .venv
+git pull
+```
+
+依存関係が増えていたら追加で:
+
+```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
@@ -183,6 +244,34 @@ GPL-3.0 (詳細は [LICENSE](LICENSE))。
 
 ## トラブルシューティング
 
-- **`pyworld` の import エラー**: Python 3.11 を使っているか確認。3.12+ では wheel がない
-- **音量が大きすぎる/クリップする**: 出力前に正規化していますが、`--saturation 0` と `--reverb-mix 0` で素直な処理だけにできます
-- **ピッチがおかしい**: pyworld の f0 検出は無声区間で時々ハマる。`--jitter-cents 0` で揺らぎを切り、エフェクトだけ使うのも手
+### セットアップ系
+
+| 症状 | 原因と対処 |
+|---|---|
+| `git: command not found` | Git未インストール。`winget install --id Git.Git` |
+| `git clone` で認証ダイアログ | publicリポジトリなので本来不要。GitHubに以前ログインしてた認証情報が古い可能性。キャンセルで通ることも |
+| `Permission denied (publickey)` | SSH URLを使っている。HTTPSの `https://github.com/or3dayo/vo_fix.git` に変更 |
+| `fatal: destination path 'vo_fix' already exists` | 同名フォルダが既にある。別の場所で clone するか既存を削除 |
+| `py -3.11` が動かない | Python 3.11未インストール。`py install 3.11` で追加(py launcher必須) |
+| `Activate.ps1` が `スクリプトの実行が無効` | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` を一度実行 |
+| `pip install` が途中で失敗 | OneDrive配下に置いていないか確認。ファイルロック衝突の主因。`C:\dev\vo_fix\` 等へ移動 |
+| `pyworld` の import エラー | Python 3.11 を使っているか確認。3.12+ では wheel がなくビルド失敗 |
+
+### Git 運用系
+
+| 症状 | 対処 |
+|---|---|
+| `! [rejected] main -> main (fetch first)` | リモートに別のコミットがある。`git pull --rebase` で取り込んでから push |
+| diverge した(両方コミットがある) | `git pull --rebase` でコンフリクト無ければ吸収。コンフリクトしたら手で解決 |
+| Web UI 編集で diverge した | `git push --force-with-lease` でローカル優先(誤操作の場合のみ) |
+| 共有先がpullできない(force push後) | `git fetch && git reset --hard origin/main` で同期 |
+
+### 音処理系
+
+| 症状 | 対処 |
+|---|---|
+| 音量が大きすぎる/クリップする | 出力前に正規化されますが、`--saturation 0 --reverb-mix 0` で素直な処理だけにできます |
+| ピッチがおかしい / ノイズが乗る | pyworld の f0 検出が無声区間で時々ハマる。`--jitter-cents 0 --vibrato-depth 0` で揺らぎを切り、エフェクトのみにする |
+| 揺らぎが効いてない感じ | 元素材が既に揺れている可能性。`--preset off` と比較するとわかる。または `--jitter-cents 15` まで強める |
+| RXが効かない/警告ログだけ出る | iLok/Product Portalで認証されているか、VST3パスが合っているか確認。`find_rx_plugins()` で検出状況確認可 |
+| Gradio が `localhost:7860` を開けない | 既に別アプリが7860使用中。`app.py` 末尾の `.launch()` を `.launch(server_port=7861)` に |
