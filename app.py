@@ -24,6 +24,9 @@ from vo_fix.theme import CUSTOM_CSS, build_theme
 from vo_fix.user_presets import (
     all_preset_names,
     delete_user_preset,
+    export_all_presets,
+    get_presets_dir,
+    import_presets,
     list_user_presets,
     resolve_preset,
     save_user_preset,
@@ -345,6 +348,33 @@ def clear_log():
     return OP_LOG.as_text()
 
 
+def export_presets_action():
+    """Bundle every saved preset into a downloadable zip."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out = Path(tempfile.mkdtemp()) / f"vo_fix_presets_{stamp}.zip"
+    export_all_presets(out)
+    count = len(list_user_presets())
+    msg = f"✅ {count} 件のプリセットをエクスポートしました ({out.name})"
+    return str(out), msg
+
+
+def import_presets_action(zip_file_path, overwrite_flag):
+    """Restore presets from an uploaded zip."""
+    if not zip_file_path:
+        return gr.update(), "⚠️ zip ファイルを選択してください"
+    try:
+        imported, skipped = import_presets(zip_file_path, overwrite=bool(overwrite_flag))
+        choices = all_preset_names()
+        msg = (
+            f"✅ {imported} 件をインポート"
+            + (f", {skipped} 件は既存のためスキップ" if skipped else "")
+            + (" (上書きON)" if overwrite_flag else "")
+        )
+        return gr.update(choices=choices), msg
+    except Exception as e:
+        return gr.update(), f"❌ インポート失敗: {e}"
+
+
 def build_ui():
     with gr.Blocks(title="vo_fix — AI歌声ナチュラライザー") as demo:
         gr.HTML(
@@ -371,10 +401,13 @@ def build_ui():
                     "💡 **polished** — 揺らぎ控えめ + 高域明るめ + リバーブ薄め。前に出したいポップス向け"
                 )
 
-                with gr.Accordion("マイプリセット (保存・削除)", open=False):
+                with gr.Accordion("マイプリセット (保存・削除・バックアップ)", open=False):
+                    presets_path = str(get_presets_dir())
                     gr.Markdown(
-                        "_現在のスライダー値に名前を付けて `~/.vo_fix/presets/` に保存。"
-                        "次回起動時にもプリセット一覧に出ます。_"
+                        "_現在のスライダー値に名前を付けて保存。次回起動時にもプリセット一覧に出ます。_  \n"
+                        f"📂 **保存先**: `{presets_path}`  \n"
+                        "_この場所はプロジェクトフォルダの外なので、`git pull` でも消えません。_  \n"
+                        "_万が一に備えて zip エクスポートでバックアップを取っておくと安心です。_"
                     )
                     new_preset_name = gr.Textbox(
                         label="保存名",
@@ -385,6 +418,23 @@ def build_ui():
                         save_btn = gr.Button("💾 現在の設定を保存", variant="secondary")
                         delete_btn = gr.Button("🗑 選択中のuser:を削除", variant="secondary")
                     preset_status = gr.Textbox(label="プリセット操作結果", interactive=False)
+
+                    gr.Markdown("---")
+                    gr.Markdown("**バックアップ / 復元**")
+                    with gr.Row():
+                        export_btn = gr.Button("📦 全プリセットを zip でエクスポート", variant="secondary")
+                    export_file = gr.File(label="エクスポートされた zip", interactive=False)
+                    import_file = gr.File(
+                        label="インポートする zip(ドラッグ&ドロップ可)",
+                        file_count="single",
+                        type="filepath",
+                        file_types=[".zip"],
+                    )
+                    import_overwrite = gr.Checkbox(
+                        label="既存と同名なら上書き", value=False,
+                        info="OFFなら同名はスキップ。ONなら zip 内容で置き換え"
+                    )
+                    import_btn = gr.Button("📥 zip からインポート", variant="secondary")
 
                 with gr.Accordion("揺らぎ (Humanize)", open=True):
                     gr.Markdown("_AI歌声の「均一すぎる」ピッチと音量に、人間の声の有機的な揺れを加える段。_")
@@ -819,6 +869,16 @@ def build_ui():
         )
 
         clear_log_btn.click(clear_log, outputs=[op_log_box])
+
+        export_btn.click(
+            export_presets_action,
+            outputs=[export_file, preset_status],
+        )
+        import_btn.click(
+            import_presets_action,
+            inputs=[import_file, import_overwrite],
+            outputs=[preset, preset_status],
+        )
 
         run_btn.click(
             run_wrapper,

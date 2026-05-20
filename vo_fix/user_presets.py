@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import zipfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,11 @@ def _presets_dir() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".vo_fix" / "presets"
+
+
+def get_presets_dir() -> Path:
+    """Public accessor so the UI can show users where presets live."""
+    return _presets_dir()
 
 
 def safe_filename(name: str) -> str:
@@ -149,6 +155,57 @@ def delete_user_preset(name: str) -> bool:
 def all_preset_names() -> list[str]:
     """Built-in + user preset names, with user ones prefixed by 'user: '."""
     return list(PRESETS.keys()) + [f"user: {n}" for n in list_user_presets()]
+
+
+def export_all_presets(output_path: str | Path) -> Path:
+    """Zip every preset JSON under the presets dir into one archive.
+
+    Returns the path to the archive. The zip is flat (no nested dirs).
+    If no presets exist, an empty archive is still produced so the user
+    has a placeholder file they can use to confirm "yes the system saw
+    zero presets" (vs. "I don't know if anything ran").
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    src = _presets_dir()
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if src.exists():
+            for f in sorted(src.glob("*.json")):
+                zf.write(f, arcname=f.name)
+    return output_path
+
+
+def import_presets(
+    archive_path: str | Path, *, overwrite: bool = False
+) -> tuple[int, int]:
+    """Restore presets from a zip created by export_all_presets.
+
+    Returns (imported, skipped). `skipped` counts files that already
+    existed and were not overwritten.
+    """
+    archive_path = Path(archive_path)
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Archive not found: {archive_path}")
+
+    dest = _presets_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    imported = 0
+    skipped = 0
+    with zipfile.ZipFile(archive_path, "r") as zf:
+        for name in zf.namelist():
+            # Strip any directory components from the archive path to
+            # prevent path-traversal from a maliciously crafted zip.
+            base = Path(name).name
+            if not base.endswith(".json"):
+                continue
+            target = dest / base
+            if target.exists() and not overwrite:
+                skipped += 1
+                continue
+            with zf.open(name) as src_f, target.open("wb") as dst_f:
+                dst_f.write(src_f.read())
+            imported += 1
+    return imported, skipped
 
 
 def resolve_preset(name: str) -> ProcessConfig:
