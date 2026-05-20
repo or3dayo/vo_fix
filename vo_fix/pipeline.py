@@ -11,6 +11,7 @@ import numpy as np
 from .effects import EffectsConfig, apply_effects
 from .humanize import HumanizeConfig, humanize
 from .io import load_wav, save_wav
+from .mix import MixConfig, mix_with_stems
 from .vocal_processing import VocalProcessingConfig, apply as apply_vocal_processing
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class ProcessConfig:
     effects: EffectsConfig = field(default_factory=EffectsConfig)
     vocal: VocalProcessingConfig = field(default_factory=VocalProcessingConfig)
     rx: RXConfig = field(default_factory=RXConfig)
+    mix: MixConfig = field(default_factory=MixConfig)
     rvc_model_path: str | None = None
     rvc_index_path: str | None = None
     rvc_pitch_semitones: float = 0.0
@@ -246,8 +248,16 @@ def process(
     input_path: str | Path, output_path: str | Path, config: ProcessConfig | None = None
 ) -> Path:
     cfg = config or get_preset("natural")
-    samples, sr, meta = load_wav(input_path, target_sr=cfg.target_sr)
+    samples, sr, meta = load_wav(
+        input_path,
+        target_sr=cfg.target_sr,
+        force_mono=cfg.force_mono,
+    )
     out, out_sr = process_array(samples, sr, cfg)
+
+    # Final stage: mix in any instrumentals / STEMs the user supplied.
+    out = mix_with_stems(out, out_sr, cfg.mix)
+
     save_wav(
         output_path,
         out,

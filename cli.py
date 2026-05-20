@@ -77,6 +77,11 @@ from vo_fix.vocal_processing import VocalProcessingConfig
 @click.option("--no-humanize", is_flag=True)
 @click.option("--no-effects", is_flag=True)
 @click.option("--mono", is_flag=True, help="Force mono processing (collapse stereo to mono, ~2x faster but loses stereo width)")
+# --- Final mix ---
+@click.option("--stem", "stems", multiple=True, type=click.Path(exists=True, dir_okay=False), help="Instrumental/STEM wav to mix in. Repeat for multiple stems.")
+@click.option("--vocal-gain", type=float, default=0.0, help="Gain (dB) applied to the processed vocal in the final mix")
+@click.option("--stems-gain", type=float, default=0.0, help="Gain (dB) applied to all stems in the final mix")
+@click.option("--master-gain", type=float, default=0.0, help="Master gain (dB) on the post-sum mix")
 def main(
     input_path: str,
     output_path: str,
@@ -127,6 +132,10 @@ def main(
     no_humanize: bool,
     no_effects: bool,
     mono: bool,
+    stems: tuple,
+    vocal_gain: float,
+    stems_gain: float,
+    master_gain: float,
 ) -> None:
     cfg = get_preset(preset)
     # Patch overrides
@@ -235,6 +244,13 @@ def main(
     cfg.skip_humanize = no_humanize
     cfg.skip_effects = no_effects
     cfg.force_mono = mono
+
+    if stems:
+        cfg.mix.enabled = True
+        cfg.mix.stem_paths = list(stems)
+        cfg.mix.vocal_gain_db = vocal_gain
+        cfg.mix.stems_gain_db = stems_gain
+        cfg.mix.master_gain_db = master_gain
 
     click.echo(f"Processing {input_path} -> {output_path} (preset={preset})")
     out = process(input_path, output_path, cfg)

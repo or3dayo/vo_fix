@@ -17,6 +17,7 @@ import soundfile as sf
 from vo_fix.effects import EffectsConfig
 from vo_fix.humanize import HumanizeConfig
 from vo_fix.io import SUBTYPE_LABELS, load_wav, save_wav
+from vo_fix.mix import MixConfig, mix_with_stems
 from vo_fix.operation_log import OperationLog
 from vo_fix.pipeline import PRESETS, ProcessConfig, RXConfig, process_array
 from vo_fix.theme import CUSTOM_CSS, build_theme
@@ -215,7 +216,18 @@ def _config_to_param_values(p: ProcessConfig) -> list:
     ]
 
 
-def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="", rvc_pitch=0.0):
+def run(
+    audio_path,
+    preset,
+    *param_values,
+    rvc_model_path="",
+    rvc_index_path="",
+    rvc_pitch=0.0,
+    stem_files=None,
+    vocal_gain=0.0,
+    stems_gain=0.0,
+    master_gain=0.0,
+):
     if audio_path is None:
         return None, "音声ファイルをアップロードしてください", OP_LOG.as_text()
 
@@ -229,10 +241,23 @@ def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="",
         cfg.rvc_index_path = rvc_index_path or None
         cfg.rvc_pitch_semitones = float(rvc_pitch)
 
+    # Stem mixing
+    stem_paths = [s for s in (stem_files or []) if s]
+    if stem_paths:
+        cfg.mix.enabled = True
+        cfg.mix.stem_paths = stem_paths
+        cfg.mix.vocal_gain_db = float(vocal_gain)
+        cfg.mix.stems_gain_db = float(stems_gain)
+        cfg.mix.master_gain_db = float(master_gain)
+
     t0 = time.perf_counter()
     try:
-        samples, sr, meta = load_wav(audio_path, target_sr=cfg.target_sr)
+        samples, sr, meta = load_wav(
+            audio_path, target_sr=cfg.target_sr, force_mono=cfg.force_mono
+        )
         out, out_sr = process_array(samples, sr, cfg)
+        # Final stage: mix in stems if any were provided
+        out = mix_with_stems(out, out_sr, cfg.mix)
         out_path = Path(tempfile.mkdtemp()) / "vo_fix_out.wav"
         used_subtype = save_wav(
             out_path,
@@ -260,14 +285,26 @@ def run(audio_path, preset, *param_values, rvc_model_path="", rvc_index_path="",
 
 
 def run_wrapper(*args):
-    """Gradio passes positional args. Split off the trailing RVC fields."""
+    """Gradio passes positional args. Order:
+    audio_path, preset, *PARAM_FIELDS, rvc_model, rvc_index, rvc_pitch,
+    stem_files, vocal_gain, stems_gain, master_gain
+    """
     audio_path, preset = args[0], args[1]
-    rvc_args = args[-3:]
-    param_values = args[2:-3]
-    return run(audio_path, preset, *param_values,
-               rvc_model_path=rvc_args[0],
-               rvc_index_path=rvc_args[1],
-               rvc_pitch=rvc_args[2])
+    n_params = len(PARAM_FIELDS)
+    param_values = args[2 : 2 + n_params]
+    rest = args[2 + n_params :]
+    rvc_model, rvc_index, rvc_pitch = rest[0], rest[1], rest[2]
+    stem_files, vocal_gain, stems_gain, master_gain = rest[3], rest[4], rest[5], rest[6]
+    return run(
+        audio_path, preset, *param_values,
+        rvc_model_path=rvc_model,
+        rvc_index_path=rvc_index,
+        rvc_pitch=rvc_pitch,
+        stem_files=stem_files,
+        vocal_gain=vocal_gain,
+        stems_gain=stems_gain,
+        master_gain=master_gain,
+    )
 
 
 def load_preset_values(preset_name):
@@ -681,6 +718,39 @@ def build_ui():
                         ),
                     )
 
+                with gr.Accordion("ステム合成 / 最終ミックス", open=False):
+                    gr.Markdown(
+                        "### 機能説明: ステム合成\n"
+                        "**インストゥルメンタルや STEM (ドラム / ベース等) を一緒にアップロードして、"
+                        "vo_fix が加工したボーカルと合成して1曲として書き出す** 機能です。\n\n"
+                        "- 加工対象は「入力 (wav)」のボーカルのみ。下の追加ファイルは **そのまま** ミックスされる\n"
+                        "- 複数ファイル選択可。ドラッグ&ドロップで複数まとめてOK\n"
+                        "- サンプルレートはボーカルに合わせて自動リサンプル / チャンネル数は自動拡張\n"
+                        "- 長さは **最も長いトラックに合わせ**、足りない箇所は無音でパディング(イントロ/アウトロのインストが生きる)\n"
+                        "- ピーク 0.99 を超える場合は自動正規化(クリップ防止)"
+                    )
+                    stem_files = gr.File(
+                        label="ステム / インストゥルメンタル(複数可)",
+                        file_count="multiple",
+                        type="filepath",
+                        file_types=[".wav", ".flac", ".mp3"],
+                    )
+                    vocal_gain = gr.Slider(
+                        -24, 12, value=0, step=0.5,
+                        label="ボーカル ゲイン (dB)",
+                        info="加工済みボーカルの音量。+ で前に / - で奥に",
+                    )
+                    stems_gain = gr.Slider(
+                        -24, 12, value=0, step=0.5,
+                        label="ステム ゲイン (dB)",
+                        info="全ステム共通の音量。インストが大きすぎる時に -3 〜 -6dB 程度",
+                    )
+                    master_gain = gr.Slider(
+                        -12, 6, value=0, step=0.5,
+                        label="マスター ゲイン (dB)",
+                        info="最終出力の音量。クリップしそうなら -1 〜 -3dB",
+                    )
+
                 with gr.Accordion("RVC 声質変換 (オプション)", open=False):
                     gr.Markdown(
                         "⚠️ vo_fix は RVC を内蔵していません。声質変換は Applio (https://applio.org/) で済ませてから vo_fix に渡すワークフローを推奨。"
@@ -755,6 +825,7 @@ def build_ui():
             inputs=[
                 audio_in, preset, *all_param_inputs,
                 rvc_model_path, rvc_index_path, rvc_pitch,
+                stem_files, vocal_gain, stems_gain, master_gain,
             ],
             outputs=[audio_out, status, op_log_box],
         )
