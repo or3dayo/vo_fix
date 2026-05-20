@@ -76,6 +76,7 @@ from vo_fix.vocal_processing import VocalProcessingConfig
 @click.option("--seed", type=int, default=None)
 @click.option("--no-humanize", is_flag=True)
 @click.option("--no-effects", is_flag=True)
+@click.option("--mono", is_flag=True, help="Force mono processing (collapse stereo to mono, ~2x faster but loses stereo width)")
 def main(
     input_path: str,
     output_path: str,
@@ -125,6 +126,7 @@ def main(
     seed: int | None,
     no_humanize: bool,
     no_effects: bool,
+    mono: bool,
 ) -> None:
     cfg = get_preset(preset)
     # Patch overrides
@@ -232,6 +234,7 @@ def main(
         cfg.rvc_pitch_semitones = rvc_pitch
     cfg.skip_humanize = no_humanize
     cfg.skip_effects = no_effects
+    cfg.force_mono = mono
 
     click.echo(f"Processing {input_path} -> {output_path} (preset={preset})")
     out = process(input_path, output_path, cfg)

@@ -57,6 +57,13 @@ class ProcessConfig:
     skip_humanize: bool = False
     skip_effects: bool = False
 
+    force_mono: bool = False
+    """If True, stereo input is averaged to mono on load and output is
+    mono. Default False = each channel is processed independently and
+    stereo width is preserved. force_mono=True is ~2x faster for stereo
+    sources.
+    """
+
 
 PRESETS: dict[str, ProcessConfig] = {
     "off": ProcessConfig(skip_humanize=True, skip_effects=True),
@@ -140,8 +147,11 @@ def apply_rx(samples: np.ndarray, sr: int, config: RXConfig) -> np.ndarray:
     return board(samples.astype(np.float32), sample_rate=sr)
 
 
-def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[np.ndarray, int]:
-    """Run the pipeline on an in-memory array. Returns (samples, sr)."""
+def _process_mono(
+    samples: np.ndarray, sr: int, config: ProcessConfig
+) -> tuple[np.ndarray, int]:
+    """The original single-channel pipeline. Used as a building block for
+    stereo via per-channel dispatch in `process_array`."""
     out = samples
     cur_sr = sr
 
@@ -162,7 +172,6 @@ def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[
             target_sr=config.target_sr or cur_sr,
         )
 
-    # Only resample if the user explicitly asked for a different rate
     if config.target_sr is not None and cur_sr != config.target_sr:
         import librosa
 
@@ -172,15 +181,65 @@ def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[
     if not config.skip_humanize:
         out = humanize(out, cur_sr, config.humanize)
 
-    # Sample-domain vocal processing (consonant shaping + breath insertion)
-    # sits between humanize and the effects chain so the inserted breaths
-    # get the same EQ / reverb treatment as the voice.
     out = apply_vocal_processing(out, cur_sr, config.vocal)
 
     if not config.skip_effects:
         out = apply_effects(out, cur_sr, config.effects)
 
     return out.astype(np.float32), cur_sr
+
+
+def process_array(samples: np.ndarray, sr: int, config: ProcessConfig) -> tuple[np.ndarray, int]:
+    """Run the pipeline. Returns (samples, sr).
+
+    Accepts:
+      - 1D (n,)          : mono - process directly
+      - 2D (n, channels) : stereo / multi-channel - process each channel
+        independently and stack back. Same RNG seed across channels so
+        jitter/breath stay coherent across L and R.
+
+    Set `config.force_mono=True` to collapse multi-channel to mono on the
+    fly (~2x faster, loses stereo width).
+    """
+    if samples.ndim == 1:
+        return _process_mono(samples, sr, config)
+
+    if samples.ndim != 2:
+        raise ValueError(f"Unsupported input array shape: {samples.shape}")
+
+    if config.force_mono:
+        # Collapse to mono and dispatch the single-channel path
+        mono = samples.mean(axis=1)
+        return _process_mono(mono, sr, config)
+
+    n_channels = samples.shape[1]
+    if n_channels == 1:
+        # Edge case: 2D array with a single column. Treat as mono.
+        out, out_sr = _process_mono(samples[:, 0], sr, config)
+        return out.reshape(-1, 1), out_sr
+
+    # Per-channel pass. We force a deterministic seed (if user didn't
+    # set one) so L and R get the same jitter / vibrato / breath pattern;
+    # otherwise the two channels would drift apart and sound wider than
+    # intended.
+    import copy
+
+    channel_outputs: list[np.ndarray] = []
+    out_sr = sr
+    for ch in range(n_channels):
+        ch_cfg = copy.deepcopy(config)
+        if ch_cfg.humanize.seed is None:
+            ch_cfg.humanize.seed = 0xC0FFEE
+        if ch_cfg.vocal.breath_seed is None:
+            ch_cfg.vocal.breath_seed = 0xC0FFEE
+        ch_out, out_sr = _process_mono(np.ascontiguousarray(samples[:, ch]), sr, ch_cfg)
+        channel_outputs.append(ch_out)
+
+    # pyworld can produce slightly different lengths across runs due to
+    # frame quantisation; clip to the shortest to keep channels aligned.
+    min_len = min(len(o) for o in channel_outputs)
+    stacked = np.stack([o[:min_len] for o in channel_outputs], axis=1)
+    return stacked.astype(np.float32), out_sr
 
 
 def process(

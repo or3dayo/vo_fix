@@ -43,8 +43,8 @@ PARAM_FIELDS = [
     "jitter_cents", "vibrato_depth", "vibrato_rate", "shimmer",
     # base effects
     "high_cut", "presence_db", "saturation", "reverb_mix", "reverb_room",
-    # skip toggles
-    "skip_humanize", "skip_effects",
+    # skip toggles + mono
+    "skip_humanize", "skip_effects", "force_mono",
     # RX
     "rx_denoise_on", "rx_denoise_db", "rx_declick_on", "rx_declick_sens", "rx_plugin_dir",
     # multi-band EQ
@@ -156,6 +156,7 @@ def _params_to_config(preset_name: str, params: dict) -> tuple[ProcessConfig, Pr
         output_subtype=_subtype_choice_to_value(params["output_subtype_choice"]),
         skip_humanize=bool(params["skip_humanize"]),
         skip_effects=bool(params["skip_effects"]),
+        force_mono=bool(params["force_mono"]),
     )
     return base, current
 
@@ -178,6 +179,7 @@ def _config_to_param_values(p: ProcessConfig) -> list:
         p.effects.reverb_room,
         p.skip_humanize,
         p.skip_effects,
+        p.force_mono,
         p.rx.voice_denoise_enabled,
         p.rx.voice_denoise_reduction_db,
         p.rx.declick_enabled,
@@ -670,6 +672,14 @@ def build_ui():
                             "FLOAT=32-bit float 最高品質。DAW に持ち込むなら 24-bit か FLOAT"
                         ),
                     )
+                    force_mono = gr.Checkbox(
+                        label="ステレオ→モノラルに集約して処理(高速)",
+                        value=False,
+                        info=(
+                            "OFF (推奨) = 入力がステレオなら L/R 独立処理してステレオで出力。"
+                            "ON = モノラルに集約してから処理(処理時間半減、ステレオ幅は失う)"
+                        ),
+                    )
 
                 with gr.Accordion("RVC 声質変換 (オプション)", open=False):
                     gr.Markdown(
@@ -704,7 +714,7 @@ def build_ui():
         all_param_inputs = [
             jitter_cents, vibrato_depth, vibrato_rate, shimmer,
             high_cut, presence_db, saturation, reverb_mix, reverb_room,
-            skip_humanize, skip_effects,
+            skip_humanize, skip_effects, force_mono,
             rx_denoise_on, rx_denoise_db, rx_declick_on, rx_declick_sens, rx_plugin_dir,
             eq_low_shelf, eq_low_mid, eq_high_mid, eq_high_shelf,
             comp_on, comp_threshold, comp_ratio, comp_attack, comp_release,

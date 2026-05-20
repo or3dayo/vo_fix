@@ -28,22 +28,40 @@ def read_meta(path: str | Path) -> AudioMeta:
 
 
 def load_wav(
-    path: str | Path, target_sr: int | None = None
+    path: str | Path,
+    target_sr: int | None = None,
+    *,
+    force_mono: bool = False,
 ) -> tuple[np.ndarray, int, AudioMeta]:
-    """Load a wav as float32 mono and report the source metadata.
+    """Load a wav as float32 and report the source metadata.
 
-    Resamples only if target_sr is given AND differs from the file's
-    native rate. Callers that want to preserve the input sample rate
-    should pass target_sr=None.
+    Returns the data as:
+      - shape (n_samples,) for mono input
+      - shape (n_samples, n_channels) for multi-channel input
+
+    Callers should pass the result straight to ``process_array`` which
+    dispatches on dimensionality.
+
+    `target_sr=None` preserves the input rate. `force_mono=True` averages
+    multi-channel to mono on load (the old default behavior).
     """
     meta = read_meta(path)
     data, sr = sf.read(str(path), dtype="float32", always_2d=False)
-    if data.ndim == 2:
+    if force_mono and data.ndim == 2:
         data = data.mean(axis=1)
+
     if target_sr is not None and target_sr != sr:
         import librosa
 
-        data = librosa.resample(data, orig_sr=sr, target_sr=target_sr)
+        if data.ndim == 1:
+            data = librosa.resample(data, orig_sr=sr, target_sr=target_sr)
+        else:
+            # librosa.resample is mono-only; do per-channel
+            resampled = [
+                librosa.resample(data[:, ch], orig_sr=sr, target_sr=target_sr)
+                for ch in range(data.shape[1])
+            ]
+            data = np.stack(resampled, axis=1)
         sr = target_sr
     return data.astype(np.float32), sr, meta
 
@@ -87,13 +105,15 @@ def save_wav(
 ) -> str:
     """Write a wav file. Returns the actual subtype used.
 
+    Accepts:
+      - 1D array (n,)          -> writes as mono
+      - 2D array (n, channels) -> writes as multi-channel
+
     If neither `subtype` nor `input_subtype` is supplied, we default to
     FLOAT (32-bit float) so no precision is lost.
 
-    Headroom protection: any peak > 0.999 is normalised down. This is
-    only meaningful for integer subtypes (FLOAT can hold +/-inf cleanly)
-    but we apply it uniformly to keep clipped DAW imports from going
-    over the line.
+    Headroom protection: any peak > 0.999 is normalised down. Only
+    meaningful for integer subtypes (FLOAT can hold values > 1.0).
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
